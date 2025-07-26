@@ -126,6 +126,10 @@ app.include_router(investigations.router, prefix="/api/v1/investigations", tags=
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(monitoring.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
 
+# Import and include integrations router
+from backend.routes import integrations
+app.include_router(integrations.router, prefix="/api/v1/integrations", tags=["Integrations"])
+
 
 @app.get("/", response_model=Dict[str, str])
 async def root():

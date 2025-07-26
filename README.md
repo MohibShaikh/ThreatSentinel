@@ -485,3 +485,151 @@ GET /api/v1/investigations/reviews/{review_id}/audit
 ---
 
 **🛡️ The AITIA SOC Agent represents the future of autonomous cybersecurity - intelligent, adaptive, and always vigilant. Deploy your AI security analyst today through a modern REST API! 🛡️** 
+
+## Modular SOC Tool Integrations
+
+AITIA now features a comprehensive integration framework that allows it to **execute actions** across popular SOC tools, not just recommend them. This transforms AITIA from an advisory system into a **fully operational security orchestration platform**.
+
+### 🔧 **Supported Integrations**
+
+| Category | Tool | Actions Supported |
+|----------|------|-------------------|
+| **🔥 Firewalls** | Palo Alto Networks | Block IP, Block URL/Domain, Create Rules |
+| | Fortinet FortiGate | Block IP, Block URL, Create Policies |
+| | pfSense | Block IP, Create Rules, Add to Watchlists |
+| **📊 SIEMs** | Splunk | Create Incidents, Alerts, Saved Searches, Watchlists |
+| | IBM QRadar | Create Offenses, Custom Rules, Reference Sets |
+| | Azure Sentinel | Create Incidents, Analytics Rules, Watchlists |
+| **💬 Communication** | Slack | Security Alerts, Notifications, Escalations |
+| | Microsoft Teams | Rich Card Alerts, Notifications, Escalations |
+| | Email | HTML Alerts, Notifications, Escalations |
+| **🎫 Incident Response** | ServiceNow | Create/Update Incidents, Escalations |
+| | Jira | Create Issues, Update Status, Escalations |
+| | PagerDuty | Trigger Alerts, Create Incidents, Escalations |
+
+### ⚡ **Automatic Action Execution**
+
+When AITIA completes an investigation, it can now **automatically execute** the recommended actions:
+
+```python
+# Example: Automatic response to malicious IP
+investigation_result = {
+    "risk_score": 0.85,
+    "recommended_actions": [
+        {
+            "action_type": "block_ip",
+            "target": "203.0.113.100",
+            "priority": "high",
+            "preferred_integrations": ["palo_alto", "fortinet"]
+        },
+        {
+            "action_type": "send_alert", 
+            "target": "Critical IP blocked automatically",
+            "context": {"severity": "high", "channel": "#security-alerts"}
+        },
+        {
+            "action_type": "create_incident",
+            "target": "Malicious IP Detected - Automatic Block Applied",
+            "context": {"severity": "high", "assignment_group": "SOC Tier 2"}
+        }
+    ]
+}
+
+# AITIA executes all actions automatically across configured tools
+```
+
+### 🔗 **Integration API Endpoints**
+
+```bash
+# List all configured integrations
+GET /api/v1/integrations/
+
+# Test integration connectivity
+POST /api/v1/integrations/{integration_name}/test
+
+# Execute single action across relevant tools
+POST /api/v1/integrations/actions/execute
+{
+  "action_type": "block_ip",
+  "target": "192.168.1.100",
+  "context": {"reason": "Malware C2 communication"}
+}
+
+# Execute multiple actions in bulk
+POST /api/v1/integrations/actions/bulk
+{
+  "actions": [
+    {"action_type": "block_ip", "target": "203.0.113.100"},
+    {"action_type": "send_alert", "target": "Threat blocked"},
+    {"action_type": "create_incident", "target": "Security Event"}
+  ]
+}
+
+# Get integration capabilities
+GET /api/v1/integrations/capabilities/block_ip
+
+# Health check all integrations
+GET /api/v1/integrations/health
+```
+
+### ⚙️ **Configuration**
+
+Configure integrations in your environment variables:
+
+```bash
+# Firewall Integration
+PALO_ALTO_HOSTNAME=firewall.company.com
+PALO_ALTO_API_KEY=your_api_key
+
+FORTINET_HOSTNAME=fortigate.company.com  
+FORTINET_API_KEY=your_api_key
+
+# SIEM Integration
+SPLUNK_HOSTNAME=splunk.company.com
+SPLUNK_TOKEN=your_splunk_token
+
+QRADAR_HOSTNAME=qradar.company.com
+QRADAR_SEC_TOKEN=your_sec_token
+
+# Communication Integration
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+
+TEAMS_WEBHOOK_URL=https://company.webhook.office.com/...
+
+EMAIL_SMTP_SERVER=smtp.company.com
+EMAIL_USERNAME=soc-agent@company.com
+EMAIL_PASSWORD=your_email_password
+
+# Incident Response Integration
+SERVICENOW_INSTANCE_URL=https://company.service-now.com
+SERVICENOW_USERNAME=api_user
+SERVICENOW_PASSWORD=api_password
+
+JIRA_SERVER_URL=https://company.atlassian.net
+JIRA_USERNAME=api_user@company.com
+JIRA_API_TOKEN=your_jira_token
+
+PAGERDUTY_API_TOKEN=your_pd_token
+PAGERDUTY_ROUTING_KEY=your_routing_key
+```
+
+### 🎯 **Real-World SOC Workflow**
+
+1. **Event Detection**: SIEM detects suspicious activity
+2. **AITIA Investigation**: Autonomous threat analysis and risk scoring
+3. **Automatic Response**: Based on risk level, AITIA executes actions:
+   - **Low Risk**: Send Slack notification to SOC team
+   - **Medium Risk**: Create Jira ticket + Email alert to analysts
+   - **High Risk**: Block IP on firewall + Create ServiceNow incident + PagerDuty alert
+   - **Critical Risk**: All of the above + Escalate to security manager
+
+### 🔒 **Enterprise Benefits**
+
+✅ **Reduced Response Time**: From hours to seconds for threat containment  
+✅ **Consistent Actions**: No human error in executing security procedures  
+✅ **Full Audit Trail**: Complete logging of all automated actions  
+✅ **Tool Orchestration**: Unified control across heterogeneous security stack  
+✅ **Scalable Operations**: Handle high-volume threats without additional staff  
+
+--- 
