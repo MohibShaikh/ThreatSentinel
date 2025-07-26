@@ -1,0 +1,54 @@
+# AITIA SOC Agent Configuration
+# Copy this file to .env and update with your actual values
+
+# Server Configuration
+HOST=0.0.0.0
+PORT=8000
+DEBUG=false
+ENVIRONMENT=development
+
+# Security
+SECRET_KEY=your-secret-key-here-change-in-production
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# External API Keys (Get these from respective providers)
+VIRUSTOTAL_API_KEY=your_virustotal_api_key_here
+ABUSEIPDB_API_KEY=your_abuseipdb_api_key_here
+URLVOID_API_KEY=your_urlvoid_api_key_here
+SHODAN_API_KEY=your_shodan_api_key_here
+
+# Agent Configuration
+CONFIDENCE_THRESHOLD=0.7
+EMERGENCY_THRESHOLD=0.8
+MAX_INVESTIGATION_TIME=300
+MAX_CONCURRENT_INVESTIGATIONS=10
+
+# Storage Paths
+DATA_DIR=data
+REPORTS_DIR=reports
+MEMORY_DIR=data/memory
+LOGS_DIR=logs
+
+# Database (future expansion)
+# DATABASE_URL=sqlite:///./aitia_soc.db
+
+# Redis (future expansion)
+# REDIS_URL=redis://localhost:6379
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FORMAT="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Rate Limiting
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=3600
+
+# CORS (configure for production)
+CORS_ORIGINS=["*"]
+
+# Monitoring
+HEALTH_CHECK_INTERVAL=60
+METRICS_ENABLED=true
+
+# Investigation Limits
+INVESTIGATION_TIMEOUT=600 

@@ -1,0 +1,127 @@
+[
+  {
+    "event_type": "suspicious_ip",
+    "source_ip": "203.0.113.100",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "payload": {
+      "failed_login_attempts": 25,
+      "accessed_endpoints": ["/admin", "/login", "/wp-admin"],
+      "time_window": "10 minutes",
+      "geographic_location": "Unknown",
+      "request_frequency": "high"
+    },
+    "timestamp": "2024-01-15T10:30:00Z",
+    "internal_source": false,
+    "raw_data": "Multiple failed authentication attempts from external IP with suspicious user agent patterns"
+  },
+  {
+    "event_type": "malware_detection",
+    "source_ip": "192.168.1.45",
+    "file_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "file_name": "suspicious_document.pdf",
+    "payload": {
+      "file_size": 2048576,
+      "detection_engine": "custom_scanner",
+      "threat_name": "Trojan.Generic.Suspicious",
+      "confidence_score": 0.85,
+      "quarantine_status": "isolated"
+    },
+    "timestamp": "2024-01-15T14:22:00Z",
+    "internal_source": true,
+    "raw_data": "Malicious file detected on internal workstation during routine scan"
+  },
+  {
+    "event_type": "suspicious_url",
+    "url": "http://malicious-example.com/phishing",
+    "source_ip": "10.0.0.25",
+    "user_agent": "curl/7.68.0",
+    "payload": {
+      "request_method": "GET",
+      "response_status": 200,
+      "content_type": "text/html",
+      "suspicious_patterns": ["credential_harvest", "fake_login"],
+      "referrer": "email_campaign"
+    },
+    "timestamp": "2024-01-15T09:15:00Z",
+    "internal_source": true,
+    "raw_data": "Employee clicked on suspicious URL from phishing email"
+  },
+  {
+    "event_type": "ddos_signs",
+    "source_ip": "198.51.100.50",
+    "payload": {
+      "request_rate": 1500,
+      "unique_user_agents": 1,
+      "target_endpoints": ["/api/login", "/api/search"],
+      "attack_duration": "15 minutes",
+      "traffic_volume_gb": 2.5,
+      "mitigation_active": false
+    },
+    "timestamp": "2024-01-15T16:45:00Z",
+    "internal_source": false,
+    "raw_data": "High volume traffic pattern detected from single IP indicating potential DDoS attack"
+  },
+  {
+    "event_type": "login_anomaly",
+    "source_ip": "172.16.0.100",
+    "user_id": "jdoe",
+    "payload": {
+      "login_time": "03:45 AM",
+      "usual_login_hours": "09:00-17:00",
+      "geographic_anomaly": true,
+      "device_fingerprint": "unknown",
+      "privilege_escalation_attempt": false,
+      "successful_login": true
+    },
+    "timestamp": "2024-01-15T03:45:00Z",
+    "internal_source": true,
+    "raw_data": "User login detected outside normal business hours from unusual location"
+  },
+  {
+    "event_type": "phishing_attempt",
+    "source_ip": "185.220.101.50",
+    "payload": {
+      "email_sender": "security@fake-bank.com",
+      "target_employees": 45,
+      "click_through_rate": 0.12,
+      "credential_harvesting": true,
+      "campaign_type": "business_email_compromise",
+      "attachment_present": false
+    },
+    "timestamp": "2024-01-15T11:30:00Z",
+    "internal_source": false,
+    "raw_data": "Coordinated phishing campaign targeting multiple employees with fake banking credentials request"
+  },
+  {
+    "event_type": "suspicious_ip",
+    "source_ip": "198.51.100.25",
+    "user_agent": "python-requests/2.28.0",
+    "payload": {
+      "scan_type": "port_scan",
+      "scanned_ports": [22, 80, 443, 3389, 5432],
+      "scan_duration": "5 minutes",
+      "stealth_mode": true,
+      "previous_activity": false
+    },
+    "timestamp": "2024-01-15T20:10:00Z",
+    "internal_source": false,
+    "raw_data": "Automated port scanning activity detected from external IP using scripted tools"
+  },
+  {
+    "event_type": "malware_detection",
+    "source_ip": "192.168.1.85",
+    "file_hash": "5d41402abc4b2a76b9719d911017c592",
+    "file_name": "invoice_update.exe",
+    "payload": {
+      "file_size": 524288,
+      "detection_engine": "behavioral_analysis",
+      "threat_name": "Ransomware.Suspected",
+      "confidence_score": 0.92,
+      "quarantine_status": "pending",
+      "process_behavior": ["file_encryption", "network_communication"]
+    },
+    "timestamp": "2024-01-15T13:20:00Z",
+    "internal_source": true,
+    "raw_data": "Suspicious executable with ransomware characteristics detected during real-time analysis"
+  }
+] 
