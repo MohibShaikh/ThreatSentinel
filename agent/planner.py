@@ -56,9 +56,10 @@ class SOCAgentPlanner:
     3. Performs risk analysis with contextual reasoning
     4. Generates prioritized action recommendations
     5. Updates memory with learned patterns
+    6. **NEW: Triggers human review for high-risk/ambiguous cases**
     
-    The planner operates autonomously but can escalate to human analysts
-    when confidence thresholds are not met.
+    The planner operates autonomously but escalates to human analysts
+    when confidence thresholds are not met or risk levels are critical.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -73,21 +74,96 @@ class SOCAgentPlanner:
         # Planning parameters
         self.confidence_threshold = config.get('confidence_threshold', 0.7)
         self.emergency_threshold = config.get('emergency_threshold', 0.8)
-        self.max_investigation_time = config.get('max_investigation_time', 300)  # 5 minutes
+        self.max_investigation_time = config.get('max_investigation_time', 300)
         
-        self.logger.info("SOC Agent Planner initialized")
-    
+        # **NEW: Human review parameters**
+        self.review_threshold = config.get('review_threshold', 0.6)
+        self.escalation_rules = self._load_escalation_rules()
+        self.audit_trail = []
+        
+        self.logger.info("SOC Agent Planner initialized with human review capabilities")
+
+    def _load_escalation_rules(self) -> List[Dict[str, Any]]:
+        """Load escalation rules for human review"""
+        default_rules = [
+            {
+                "name": "high_risk_threshold",
+                "condition": lambda risk, confidence: risk >= 0.8,
+                "reason": "Risk score exceeds high threshold",
+                "priority": "high"
+            },
+            {
+                "name": "low_confidence",
+                "condition": lambda risk, confidence: confidence < 0.5,
+                "reason": "Analysis confidence below threshold", 
+                "priority": "medium"
+            },
+            {
+                "name": "critical_infrastructure",
+                "condition": lambda risk, confidence, context: context.get("asset_criticality") == "critical",
+                "reason": "Critical infrastructure asset involved",
+                "priority": "critical"
+            },
+            {
+                "name": "unknown_threat_signature",
+                "condition": lambda risk, confidence, context: context.get("unknown_indicators", 0) > 3,
+                "reason": "Multiple unknown threat indicators detected",
+                "priority": "high"
+            }
+        ]
+        return default_rules
+
+    async def _check_escalation_triggers(self, context, risk_assessment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Check if investigation should be escalated for human review"""
+        escalation_triggers = []
+        priority = "low"
+        
+        risk_score = risk_assessment.get('risk_score', 0)
+        confidence = risk_assessment.get('confidence', 1.0)
+        
+        # Check each escalation rule
+        for rule in self.escalation_rules:
+            try:
+                if rule["condition"](risk_score, confidence, context.__dict__):
+                    escalation_triggers.append(rule["name"])
+                    if rule["priority"] in ["critical", "high"] and priority not in ["critical"]:
+                        priority = rule["priority"]
+                    elif rule["priority"] == "critical":
+                        priority = "critical"
+            except Exception as e:
+                self.logger.warning(f"Error evaluating escalation rule {rule['name']}: {e}")
+        
+        if escalation_triggers:
+            return {
+                "should_escalate": True,
+                "triggers": escalation_triggers,
+                "priority": priority,
+                "risk_score": risk_score,
+                "confidence_score": confidence,
+                "reason": f"Triggered rules: {', '.join(escalation_triggers)}"
+            }
+        
+        return None
+
+    async def _create_audit_entry(self, investigation_id: str, event_type: str, 
+                                action: str, details: Dict[str, Any], actor: str = "system"):
+        """Create audit trail entry"""
+        audit_entry = {
+            "investigation_id": investigation_id,
+            "event_type": event_type,
+            "actor": actor,
+            "action": action,
+            "details": details,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        self.audit_trail.append(audit_entry)
+        self.logger.info(f"Audit: {event_type} - {action} by {actor}")
+
     async def investigate_incident(self, event_data: Dict[str, Any], 
-                                 emergency_mode: bool = False) -> Dict[str, Any]:
+                                  emergency_mode: bool = False) -> Dict[str, Any]:
         """
-        Main investigation orchestration method
-        
-        Args:
-            event_data: Security event to investigate
-            emergency_mode: If True, prioritize speed over thoroughness
-            
-        Returns:
-            Complete investigation report
+        Main investigation orchestration method with human review integration
         """
         event_id = f"evt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(event_data)) % 10000}"
         
@@ -96,6 +172,12 @@ class SOCAgentPlanner:
             event_data=event_data,
             phase=InvestigationPhase.INITIAL_ASSESSMENT,
             intelligence_data={}
+        )
+        
+        # **NEW: Create initial audit entry**
+        await self._create_audit_entry(
+            event_id, "investigation_started", "automatic_investigation_initiated",
+            {"event_type": event_data.get("event_type"), "emergency_mode": emergency_mode}
         )
         
         try:
@@ -108,6 +190,29 @@ class SOCAgentPlanner:
             # Phase 3: Risk Analysis
             await self._risk_analysis(context, emergency_mode)
             
+            # **NEW: Phase 3.5: Human Review Check**
+            escalation_check = await self._check_escalation_triggers(context, context.risk_assessment)
+            
+            if escalation_check and escalation_check["should_escalate"] and not emergency_mode:
+                # Create human review request
+                context.requires_human_review = True
+                context.escalation_details = escalation_check
+                
+                await self._create_audit_entry(
+                    event_id, "human_review_requested", "escalation_triggered",
+                    escalation_check
+                )
+                
+                self.logger.warning(f"Investigation {event_id} escalated for human review: {escalation_check['reason']}")
+                
+                # Return partial results with review request
+                return {
+                    **context.__dict__,
+                    "status": "pending_human_review",
+                    "review_request": escalation_check,
+                    "partial_analysis": True
+                }
+            
             # Phase 4: Action Planning
             await self._action_planning(context, emergency_mode)
             
@@ -117,11 +222,61 @@ class SOCAgentPlanner:
             # Phase 6: Update Memory
             await self._update_memory(context)
             
-            return context.__dict__
+            # **NEW: Final audit entry**
+            await self._create_audit_entry(
+                event_id, "investigation_completed", "autonomous_analysis_finished",
+                {"risk_score": context.risk_assessment.get('risk_score')}
+            )
+            
+            return {
+                **context.__dict__,
+                "status": "completed",
+                "audit_trail": self.audit_trail
+            }
             
         except Exception as e:
-            self.logger.error(f"Investigation failed for {event_id}: {str(e)}")
+            await self._create_audit_entry(
+                event_id, "investigation_failed", "error_occurred",
+                {"error": str(e), "phase": context.phase.value}
+            )
             return await self._handle_investigation_failure(context, e)
+
+    async def process_analyst_feedback(self, investigation_id: str, feedback: Dict[str, Any]) -> Dict[str, Any]:
+        """Process feedback from human analyst for continuous learning"""
+        
+        await self._create_audit_entry(
+            investigation_id, "analyst_feedback_received", "human_review_completed",
+            {
+                "analyst_id": feedback.get("analyst_id"),
+                "review_status": feedback.get("review_status"),
+                "accuracy_rating": feedback.get("accuracy_rating"),
+                "false_positive": feedback.get("false_positive", False)
+            },
+            actor=feedback.get("analyst_id", "unknown_analyst")
+        )
+        
+        # Update memory with analyst corrections
+        if feedback.get("false_positive"):
+            await self.memory.mark_false_positive(investigation_id, feedback.get("learning_notes", ""))
+        
+        if feedback.get("missed_indicators"):
+            await self.memory.add_missed_indicators(investigation_id, feedback["missed_indicators"])
+        
+        # Adjust future confidence based on feedback
+        accuracy_rating = feedback.get("accuracy_rating", 3)
+        if accuracy_rating <= 2:
+            self.confidence_threshold = min(self.confidence_threshold + 0.05, 0.9)
+        elif accuracy_rating >= 4:
+            self.confidence_threshold = max(self.confidence_threshold - 0.02, 0.5)
+        
+        self.logger.info(f"Processed analyst feedback for {investigation_id}, adjusted confidence threshold to {self.confidence_threshold}")
+        
+        return {
+            "status": "feedback_processed",
+            "investigation_id": investigation_id,
+            "learning_applied": True,
+            "new_confidence_threshold": self.confidence_threshold
+        }
     
     async def _initial_assessment(self, context: InvestigationContext, emergency_mode: bool):
         """Phase 1: Assess the event and determine investigation strategy"""

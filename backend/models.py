@@ -304,3 +304,77 @@ class ValidationErrorResponse(BaseModel):
     status_code: int = Field(..., description="HTTP status code")
     timestamp: datetime = Field(..., description="Error timestamp")
     validation_errors: List[Dict[str, Any]] = Field(..., description="Detailed validation errors") 
+
+class ReviewStatus(str, Enum):
+    """Review status for human oversight"""
+    PENDING_REVIEW = "pending_review"
+    UNDER_REVIEW = "under_review" 
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    NEEDS_ESCALATION = "needs_escalation"
+
+class ReviewPriority(str, Enum):
+    """Priority levels for human review"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+class HumanReviewRequest(BaseModel):
+    """Request for human analyst review"""
+    investigation_id: str
+    reason: str
+    priority: ReviewPriority
+    risk_score: float
+    confidence_score: float
+    escalation_triggers: List[str]
+    auto_escalated: bool = False
+    assigned_analyst: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AnalystFeedback(BaseModel):
+    """Analyst feedback on investigation"""
+    investigation_id: str
+    analyst_id: str
+    review_status: ReviewStatus
+    feedback_text: str
+    accuracy_rating: int = Field(ge=1, le=5, description="1-5 rating of AI analysis accuracy")
+    false_positive: bool = False
+    missed_indicators: List[str] = []
+    suggested_actions: List[str] = []
+    learning_notes: str = ""
+    reviewed_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AuditEntry(BaseModel):
+    """Audit trail entry for compliance"""
+    investigation_id: str
+    event_type: str  # "investigation_started", "review_requested", "feedback_received", etc.
+    actor: str  # "system" or analyst ID
+    action: str
+    details: Dict[str, Any]
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    ip_address: Optional[str] = None
+    session_id: Optional[str] = None
+
+class ReviewQueue(BaseModel):
+    """Human review queue item"""
+    review_id: str
+    investigation_id: str
+    priority: ReviewPriority
+    status: ReviewStatus
+    reason: str
+    risk_score: float
+    confidence_score: float
+    assigned_analyst: Optional[str] = None
+    created_at: datetime
+    sla_deadline: datetime
+    escalation_count: int = 0
+
+class EscalationRule(BaseModel):
+    """Rules for automatic escalation to human review"""
+    name: str
+    description: str
+    enabled: bool = True
+    conditions: Dict[str, Any]  # risk_threshold, confidence_threshold, event_types, etc.
+    priority: ReviewPriority
+    notify_channels: List[str] = []  # email, slack, teams, etc. 

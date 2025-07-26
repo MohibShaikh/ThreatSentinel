@@ -411,6 +411,77 @@ LOG_LEVEL=DEBUG python main_api.py
 3. **New Endpoints**: Create in appropriate `backend/routes/` module
 4. **New Monitoring**: Extend `backend/routes/monitoring.py`
 
+## Human Oversight & Enterprise Features
+
+### Human Review Workflow
+AITIA includes comprehensive human oversight capabilities for enterprise environments:
+
+**Automatic Escalation Triggers:**
+- Risk score exceeds 0.8 (high-risk threshold)
+- Analysis confidence below 0.5 (uncertain cases)
+- Critical infrastructure assets involved
+- Multiple unknown threat indicators detected
+
+**Review Queue Management:**
+- Priority-based SLA assignments (Critical: 1hr, High: 4hr, Medium: 24hr, Low: 72hr)
+- Analyst assignment and workload distribution
+- Real-time review status tracking
+
+**Audit Trail & Compliance:**
+- Complete audit logs for all investigation actions
+- Analyst feedback tracking for AI improvement
+- Investigation decision history for compliance reporting
+
+### Human Review API Endpoints
+
+```bash
+# Request human review for investigation
+POST /api/v1/investigations/reviews/
+{
+  "investigation_id": "evt_20240126_143022_1234",
+  "reason": "High risk score requires human validation", 
+  "priority": "high",
+  "risk_score": 0.85,
+  "confidence_score": 0.45
+}
+
+# Get review queue for analysts
+GET /api/v1/investigations/reviews/queue?priority=critical
+
+# Assign review to analyst
+POST /api/v1/investigations/reviews/{review_id}/assign
+{
+  "analyst_id": "john.doe@company.com"
+}
+
+# Submit analyst feedback
+POST /api/v1/investigations/reviews/{review_id}/feedback
+{
+  "analyst_id": "john.doe@company.com",
+  "review_status": "approved",
+  "accuracy_rating": 4,
+  "feedback_text": "Analysis accurate, recommend blocking IP",
+  "false_positive": false
+}
+
+# Get audit trail
+GET /api/v1/investigations/reviews/{review_id}/audit
+```
+
+### Continuous Learning
+
+**AI Improvement Through Feedback:**
+- Analyst accuracy ratings (1-5 scale) adjust AI confidence thresholds
+- False positive marking prevents similar misclassifications
+- Missed indicator reporting enhances future detection
+- Pattern learning from human corrections
+
+**Analytics & Metrics:**
+- Review completion rates and SLA adherence
+- AI accuracy trends over time
+- False positive reduction tracking
+- Escalation trigger effectiveness
+
 ---
 
 **🛡️ The AITIA SOC Agent represents the future of autonomous cybersecurity - intelligent, adaptive, and always vigilant. Deploy your AI security analyst today through a modern REST API! 🛡️** 
