@@ -1,4 +1,4 @@
-# AITIA SOC Agent - Autonomous Security Operations Center
+# ThreatSentinel SOC Agent - Autonomous Security Operations Center
 
 🛡**An intelligent AI agent that acts as an automated first responder for security operations centers, providing autonomous threat investigation and response recommendations for organizations without dedicated SOC teams.**
 
@@ -6,13 +6,13 @@
 
 **Scenario:** Your SIEM detects a suspicious IP `203.0.113.100` attempting 50 failed logins in 2 minutes.
 
-**Without AITIA:**  Page analyst → ⏰ Wait for response → 🔍 Manual investigation →  Research threat intel →  Assess risk →  Write report → Take action *(2-6 hours)*
+**Without ThreatSentinel:**  Page analyst → ⏰ Wait for response → 🔍 Manual investigation →  Research threat intel →  Assess risk →  Write report → Take action *(2-6 hours)*
 
-**With AITIA:** **Automatic investigation** →  **Threat intelligence fusion** → ⚖️ **Risk assessment** → 🔥 **Auto-block on firewall** →  **Slack alert to team** → **Investigation report** *(30 seconds)*
+**With ThreatSentinel:** **Automatic investigation** →  **Threat intelligence fusion** → ⚖️ **Risk assessment** → 🔥 **Auto-block on firewall** →  **Slack alert to team** → **Investigation report** *(30 seconds)*
 
-## What is the AITIA SOC Agent?
+## What is the ThreatSentinel SOC Agent?
 
-The AITIA SOC Agent is a **single autonomous agent** that combines **tool use**, **memory**, and **planning** to investigate security events automatically. It acts like an experienced security analyst that never sleeps, analyzing threats 24/7 and providing actionable intelligence through a modern REST API.
+The ThreatSentinel SOC Agent is a **single autonomous agent** that combines **tool use**, **memory**, and **planning** to investigate security events automatically. It acts like an experienced security analyst that never sleeps, analyzing threats 24/7 and providing actionable intelligence through a modern REST API.
 
 ### **Perfect For:**
 - **Small/Medium Businesses** without dedicated security teams
@@ -20,8 +20,8 @@ The AITIA SOC Agent is a **single autonomous agent** that combines **tool use**,
 - **24/7 Security Coverage** without human analysts on-call
 - **Consistent Response Quality** eliminating human error and fatigue
 
-###  **Why "AITIA"?**
-**AITIA** (*Greek: αἰτία*) means "cause" or "reason" - the fundamental principle of investigation. Just as human analysts seek the *cause* behind security events, AITIA autonomously investigates the *reason* behind every threat.
+###  **Why "ThreatSentinel"?**
+**ThreatSentinel** (*Greek: αἰτία*) means "cause" or "reason" - the fundamental principle of investigation. Just as human analysts seek the *cause* behind security events, ThreatSentinel autonomously investigates the *reason* behind every threat.
 
 **Alternative Names for Enterprise Deployment:**
 - **CyberIntelAgent** - For organizations preferring explicit cybersecurity branding
@@ -33,7 +33,7 @@ The AITIA SOC Agent is a **single autonomous agent** that combines **tool use**,
 ## 🏗️ Architecture Overview
 
 ```
-aitia-agent/
+ThreatSentinel-agent/
 ├── agent/                    # Core agent logic (LLM, tools, planner)
 │   ├── __init__.py
 │   ├── planner.py            # Decision flow using autonomous reasoning
@@ -64,7 +64,7 @@ aitia-agent/
 
 ## 🧠 How It Works
 
-The AITIA SOC Agent follows a sophisticated autonomous workflow that mimics human security analyst reasoning:
+The ThreatSentinel SOC Agent follows a sophisticated autonomous workflow that mimics human security analyst reasoning:
 
 ```mermaid
 graph TB
@@ -75,7 +75,7 @@ graph TB
         THREAT_FEED["Threat Feeds"]
     end
     
-    subgraph "AITIA SOC Agent Core"
+    subgraph "ThreatSentinel SOC Agent Core"
         EVENT_CLASSIFIER["Event Classifier"]
         PLANNER["SOC Agent Planner"]
         INTEL_GATHERER["Intelligence Gatherer"]
@@ -208,9 +208,9 @@ graph TB
     class BLOCK_IP,CREATE_INCIDENT,SEND_ALERTS,UPDATE_RULES,ESCALATE action
 ```
 
-### AITIA Integration Architecture Explained:
+### ThreatSentinel Integration Architecture Explained:
 
-The **AITIA SOC Agent Core** contains the autonomous components that make intelligent security decisions:
+The **ThreatSentinel SOC Agent Core** contains the autonomous components that make intelligent security decisions:
 
 1. **Event Classifier**: Analyzes and categorizes incoming security events from multiple sources
 2. **SOC Agent Planner**: Orchestrates the entire investigation workflow with human oversight integration
@@ -226,7 +226,7 @@ The **Integration Registry** serves as the central orchestration hub for executi
 💬 **Communication Integrations**: Send rich alerts and escalations via Slack, Teams, and Email  
 🎫 **Incident Response Integrations**: Auto-create tickets and alerts in ServiceNow, Jira, and PagerDuty  
 
-The agent **autonomously executes** security responses across your entire technology stack, transforming AITIA from an advisory system into a **fully operational security orchestration platform**.
+The agent **autonomously executes** security responses across your entire technology stack, transforming ThreatSentinel from an advisory system into a **fully operational security orchestration platform**.
 
 ## ✨ Core Features
 
@@ -276,8 +276,8 @@ The agent **autonomously executes** security responses across your entire techno
 ### **Step 1: Clone & Setup** ⏱️ *~2 minutes*
 ```bash
 # Clone the repository
-git clone https://github.com/MohibShaikh/aitia-agent.git
-cd aitia-agent
+git clone https://github.com/MohibShaikh/ThreatSentinel-agent.git
+cd ThreatSentinel-agent
 
 # Create and activate virtual environment
 python -m venv venv
@@ -301,25 +301,25 @@ cp env_template .env
 # ABUSEIPDB_API_KEY=your_abuseipdb_key_here
 # URLVOID_API_KEY=your_urlvoid_key_here
 
-# Don't have API keys? No problem! AITIA works with simulated data for testing
+# Don't have API keys? No problem! ThreatSentinel works with simulated data for testing
 ```
 
-### **Step 3: Launch AITIA** ⏱️ *~30 seconds*
+### **Step 3: Launch ThreatSentinel** ⏱️ *~30 seconds*
 ```bash
-# Start the AITIA SOC Agent
+# Start the ThreatSentinel SOC Agent
 python main_api.py
 ```
 
 **Expected Output:**
 ```
-🛡️  AITIA SOC Agent Starting...
+🛡️  ThreatSentinel SOC Agent Starting...
 ✅ Agent Planner initialized
 ✅ Tool Registry loaded (VirusTotal, AbuseIPDB, URLVoid, Shodan)
 ✅ Agent Memory connected (SQLite)
 ✅ Integration Registry loaded (10 platforms)
 ✅ FastAPI server ready
 
-🚀 AITIA SOC Agent running at: http://localhost:8000
+🚀 ThreatSentinel SOC Agent running at: http://localhost:8000
 📖 API Documentation: http://localhost:8000/docs
 🔍 Health Check: http://localhost:8000/health
 ```
@@ -365,7 +365,7 @@ curl -X POST "http://localhost:8000/api/v1/investigations/" \
   }'
 ```
 
-### **Step 5: See AITIA in Action** 
+### **Step 5: See ThreatSentinel in Action** 
 
 **Sample Investigation Response:**
 ```json
@@ -397,7 +397,7 @@ curl -X POST "http://localhost:8000/api/v1/investigations/" \
 }
 ```
 
-🎉 **That's it! AITIA is now protecting your organization 24/7!**
+🎉 **That's it! ThreatSentinel is now protecting your organization 24/7!**
 
 ## 🔧 API Endpoints
 
@@ -504,7 +504,7 @@ ws.onmessage = function(event) {
 
 ## 📊 Risk Assessment Algorithm
 
-The AITIA SOC Agent uses a weighted scoring system:
+The ThreatSentinel SOC Agent uses a weighted scoring system:
 
 ```
 Final Risk Score = (Base Risk × 30%) + (Threat Intel × 50%) + (Context × 20%)
@@ -625,7 +625,7 @@ LOG_LEVEL=DEBUG python main_api.py
 ## Human Oversight & Enterprise Features
 
 ### Human Review Workflow
-AITIA includes comprehensive human oversight capabilities for enterprise environments:
+ThreatSentinel includes comprehensive human oversight capabilities for enterprise environments:
 
 **Automatic Escalation Triggers:**
 - Risk score exceeds 0.8 (high-risk threshold)
@@ -695,11 +695,11 @@ GET /api/v1/investigations/reviews/{review_id}/audit
 
 ---
 
-**🛡️ The AITIA SOC Agent represents the future of autonomous cybersecurity - intelligent, adaptive, and always vigilant. Deploy your AI security analyst today through a modern REST API! 🛡️** 
+**🛡️ The ThreatSentinel SOC Agent represents the future of autonomous cybersecurity - intelligent, adaptive, and always vigilant. Deploy your AI security analyst today through a modern REST API! 🛡️** 
 
 ## Modular SOC Tool Integrations
 
-AITIA now features a comprehensive integration framework that allows it to **execute actions** across popular SOC tools, not just recommend them. This transforms AITIA from an advisory system into a **fully operational security orchestration platform**.
+ThreatSentinel now features a comprehensive integration framework that allows it to **execute actions** across popular SOC tools, not just recommend them. This transforms ThreatSentinel from an advisory system into a **fully operational security orchestration platform**.
 
 ### 🔧 **Supported Integrations**
 
@@ -720,7 +720,7 @@ AITIA now features a comprehensive integration framework that allows it to **exe
 
 ### ⚡ **Automatic Action Execution**
 
-When AITIA completes an investigation, it can now **automatically execute** the recommended actions:
+When ThreatSentinel completes an investigation, it can now **automatically execute** the recommended actions:
 
 ```python
 # Example: Automatic response to malicious IP
@@ -746,7 +746,7 @@ investigation_result = {
     ]
 }
 
-# AITIA executes all actions automatically across configured tools
+# ThreatSentinel executes all actions automatically across configured tools
 ```
 
 ### 🔗 **Integration API Endpoints**
@@ -828,8 +828,8 @@ PAGERDUTY_ROUTING_KEY=your_routing_key
 ### 🎯 **Real-World SOC Workflow**
 
 1. **Event Detection**: SIEM detects suspicious activity
-2. **AITIA Investigation**: Autonomous threat analysis and risk scoring
-3. **Automatic Response**: Based on risk level, AITIA executes actions:
+2. **ThreatSentinel Investigation**: Autonomous threat analysis and risk scoring
+3. **Automatic Response**: Based on risk level, ThreatSentinel executes actions:
    - **Low Risk**: Send Slack notification to SOC team
    - **Medium Risk**: Create Jira ticket + Email alert to analysts
    - **High Risk**: Block IP on firewall + Create ServiceNow incident + PagerDuty alert
@@ -845,7 +845,7 @@ PAGERDUTY_ROUTING_KEY=your_routing_key
 
 ## 🚀 Enterprise-Grade Agent Depth 
 
-AITIA has been enhanced with advanced enterprise features addressing the "Agent Depth" requirements:
+ThreatSentinel has been enhanced with advanced enterprise features addressing the "Agent Depth" requirements:
 
 ### 🎯 **Priority-Based Task Queue System**
 - **Intelligent Queuing**: Emergency > Critical > High > Medium > Low priority processing
@@ -945,11 +945,11 @@ GET /api/v1/audit/statistics/overview           # High-level statistics
 ### 🔧 **Enterprise Deployment Example**
 
 ```python
-# Production-grade AITIA deployment
+# Production-grade ThreatSentinel deployment
 import asyncio
 from agent import SOCAgentPlanner, TaskQueue, ActionLogger
 
-async def enterprise_aitia():
+async def enterprise_ThreatSentinel():
     # Initialize with enterprise features
     agent = SOCAgentPlanner(
         memory_retention_days=180,
@@ -978,6 +978,6 @@ async def enterprise_aitia():
         await asyncio.sleep(60)
 ```
 
-**🎯 These enterprise enhancements transform AITIA from a basic automation tool into a production-grade, self-managing SOC agent capable of handling enterprise-scale security operations with full audit compliance and continuous learning capabilities.**
+**🎯 These enterprise enhancements transform ThreatSentinel from a basic automation tool into a production-grade, self-managing SOC agent capable of handling enterprise-scale security operations with full audit compliance and continuous learning capabilities.**
 
 --- 
