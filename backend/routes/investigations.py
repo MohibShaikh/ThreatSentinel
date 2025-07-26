@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent - Investigation Routes
+ThreatSentinel SOC Agent - Investigation Routes
 
 API routes for managing security incident investigations.
 """

@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent Backend - FastAPI Application
+ThreatSentinel SOC Agent Backend - FastAPI Application
 
 RESTful API backend for the SOC Agent providing web-based access
 to investigation capabilities, real-time monitoring, and report retrieval.

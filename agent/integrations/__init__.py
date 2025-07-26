@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent - Integration Framework
+ThreatSentinel SOC Agent - Integration Framework
 
 This module provides a modular framework for integrating with various SOC tools
 including SIEMs, firewalls, incident response platforms, and communication tools.

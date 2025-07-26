@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent Backend Models
+ThreatSentinel SOC Agent Backend Models
 
 Pydantic models for API request and response validation.
 """

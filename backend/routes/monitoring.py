@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent - Monitoring Routes
+ThreatSentinel SOC Agent - Monitoring Routes
 
 API routes for real-time monitoring, metrics, and system health.
 """

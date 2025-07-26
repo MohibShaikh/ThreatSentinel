@@ -186,7 +186,7 @@ class BaseIntegration(ABC):
         """Create aiohttp session with common configuration"""
         timeout = aiohttp.ClientTimeout(total=30)
         headers = {
-            'User-Agent': f'AITIA-SOC-Agent/{self.name}',
+            'User-Agent': f'ThreatSentinel-SOC-Agent/{self.name}',
             'Content-Type': 'application/json'
         }
         

@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent - Comprehensive Action Logging
+ThreatSentinel SOC Agent - Comprehensive Action Logging
 
 Provides detailed logging of all agent actions, decisions, integrations,
 and outcomes for audit trails, compliance, and continuous learning.
@@ -94,7 +94,7 @@ class ActionLog:
 
 class ActionLogger:
     """
-    Comprehensive action logging system for AITIA SOC Agent.
+    Comprehensive action logging system for ThreatSentinel SOC Agent.
     
     Features:
     - Detailed action tracking with metadata

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AITIA SOC Agent - API Server Entry Point
+ThreatSentinel SOC Agent - API Server Entry Point
 """
 
 if __name__ == "__main__":

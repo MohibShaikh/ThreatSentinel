@@ -117,8 +117,8 @@ class SplunkIntegration(BaseIntegration):
         url = f"https://{self.hostname}:{self.port}/services/receivers/simple"
         
         event_data = {
-            "source": "AITIA SOC Agent",
-            "sourcetype": "aitia:incident",
+            "source": "ThreatSentinel SOC Agent",
+            "sourcetype": "ThreatSentinel:incident",
             "index": self.index,
             "event": {
                 "title": title,
@@ -129,7 +129,7 @@ class SplunkIntegration(BaseIntegration):
                 "indicators": context.get("indicators", []),
                 "recommended_actions": context.get("actions", []),
                 "timestamp": context.get("timestamp"),
-                "event_type": "aitia_incident"
+                "event_type": "ThreatSentinel_incident"
             }
         }
         
@@ -147,8 +147,8 @@ class SplunkIntegration(BaseIntegration):
         url = f"https://{self.hostname}:{self.port}/services/receivers/simple"
         
         alert_data = {
-            "source": "AITIA SOC Agent",
-            "sourcetype": "aitia:alert",
+            "source": "ThreatSentinel SOC Agent",
+            "sourcetype": "ThreatSentinel:alert",
             "index": self.index,
             "event": {
                 "message": message,
@@ -157,7 +157,7 @@ class SplunkIntegration(BaseIntegration):
                 "investigation_id": context.get("investigation_id"),
                 "indicators": context.get("indicators", []),
                 "timestamp": context.get("timestamp"),
-                "event_type": "aitia_alert"
+                "event_type": "ThreatSentinel_alert"
             }
         }
         
@@ -173,13 +173,13 @@ class SplunkIntegration(BaseIntegration):
     async def _add_to_watchlist(self, indicator: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Add indicator to Splunk watchlist (lookup table)"""
         # Create/update lookup table for threat indicators
-        url = f"https://{self.hostname}:{self.port}/services/data/lookup-table-files/aitia_watchlist.csv"
+        url = f"https://{self.hostname}:{self.port}/services/data/lookup-table-files/ThreatSentinel_watchlist.csv"
         
         watchlist_entry = {
             "indicator": indicator,
             "indicator_type": context.get("indicator_type", "unknown"),
             "threat_level": context.get("threat_level", "medium"),
-            "added_by": "AITIA SOC Agent",
+            "added_by": "ThreatSentinel SOC Agent",
             "added_date": context.get("timestamp"),
             "investigation_id": context.get("investigation_id"),
             "description": context.get("description", "")
@@ -205,7 +205,7 @@ class SplunkIntegration(BaseIntegration):
         
         return {
             "indicator": indicator,
-            "watchlist": "aitia_watchlist",
+            "watchlist": "ThreatSentinel_watchlist",
             "action": "added",
             "reference_id": f"watchlist_{hash(indicator) % 10000}"
         }
@@ -217,7 +217,7 @@ class SplunkIntegration(BaseIntegration):
         search_data = {
             "name": search_name,
             "search": context.get("search_query", f'search index={self.index} "{context.get("target", "")}"'),
-            "description": f"Created by AITIA SOC Agent - {context.get('description', '')}",
+            "description": f"Created by ThreatSentinel SOC Agent - {context.get('description', '')}",
             "is_scheduled": context.get("schedule", False),
             "cron_schedule": context.get("cron", "0 */1 * * *"),  # Every hour by default
             "actions": "email" if context.get("email_alert") else ""
@@ -239,7 +239,7 @@ class SplunkIntegration(BaseIntegration):
         csv_header = "indicator,indicator_type,threat_level,added_by,added_date,investigation_id,description\n"
         
         lookup_data = {
-            "filename": "aitia_watchlist.csv",
+            "filename": "ThreatSentinel_watchlist.csv",
             "contents": csv_header
         }
         
@@ -366,7 +366,7 @@ class QRadarIntegration(BaseIntegration):
     
     async def _add_to_reference_set(self, indicator: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Add indicator to QRadar reference set"""
-        reference_set_name = context.get("reference_set", "AITIA_Threat_Indicators")
+        reference_set_name = context.get("reference_set", "ThreatSentinel_Threat_Indicators")
         
         # First, ensure reference set exists
         try:
@@ -395,7 +395,7 @@ class QRadarIntegration(BaseIntegration):
             "name": rule_name,
             "type": "EVENT",
             "enabled": True,
-            "owner": "AITIA SOC Agent",
+            "owner": "ThreatSentinel SOC Agent",
             "tests": [
                 {
                     "text": context.get("rule_logic", f"SELECT * WHERE sourceip = '{context.get('target', '')}'"),
@@ -550,12 +550,12 @@ class SentinelIntegration(BaseIntegration):
         incident_data = {
             "properties": {
                 "title": title,
-                "description": context.get("description", "Created by AITIA SOC Agent"),
+                "description": context.get("description", "Created by ThreatSentinel SOC Agent"),
                 "severity": context.get("severity", "Medium"),
                 "status": "New",
                 "classification": "Undetermined",
                 "owner": {
-                    "assignedTo": "AITIA SOC Agent"
+                    "assignedTo": "ThreatSentinel SOC Agent"
                 }
             }
         }
@@ -581,7 +581,7 @@ class SentinelIntegration(BaseIntegration):
             "kind": "Scheduled",
             "properties": {
                 "displayName": rule_name,
-                "description": f"Created by AITIA SOC Agent - {context.get('description', '')}",
+                "description": f"Created by ThreatSentinel SOC Agent - {context.get('description', '')}",
                 "severity": context.get("severity", "Medium"),
                 "enabled": True,
                 "query": context.get("kql_query", f"SecurityEvent | where Computer contains '{context.get('target', '')}'"),
@@ -609,7 +609,7 @@ class SentinelIntegration(BaseIntegration):
     
     async def _add_to_watchlist(self, indicator: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Add indicator to Azure Sentinel watchlist"""
-        watchlist_alias = context.get("watchlist", "AITIA_Threat_Indicators")
+        watchlist_alias = context.get("watchlist", "ThreatSentinel_Threat_Indicators")
         
         # Create watchlist if it doesn't exist
         try:
@@ -626,7 +626,7 @@ class SentinelIntegration(BaseIntegration):
                     "indicator": indicator,
                     "indicator_type": context.get("indicator_type", "unknown"),
                     "threat_level": context.get("threat_level", "medium"),
-                    "added_by": "AITIA SOC Agent",
+                    "added_by": "ThreatSentinel SOC Agent",
                     "investigation_id": context.get("investigation_id", "")
                 }
             }
@@ -651,9 +651,9 @@ class SentinelIntegration(BaseIntegration):
         
         watchlist_data = {
             "properties": {
-                "displayName": "AITIA Threat Indicators",
-                "description": "Threat indicators managed by AITIA SOC Agent",
-                "provider": "AITIA SOC Agent",
+                "displayName": "ThreatSentinel Threat Indicators",
+                "description": "Threat indicators managed by ThreatSentinel SOC Agent",
+                "provider": "ThreatSentinel SOC Agent",
                 "source": "Local file",
                 "itemsSearchKey": "indicator"
             }

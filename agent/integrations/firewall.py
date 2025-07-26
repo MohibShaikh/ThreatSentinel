@@ -119,7 +119,7 @@ class PaloAltoIntegration(BaseIntegration):
             <address>
                 <entry name="{address_name}">
                     <ip-netmask>{ip}</ip-netmask>
-                    <description>Blocked by AITIA SOC Agent - {context.get('reason', 'Security threat')}</description>
+                    <description>Blocked by ThreatSentinel SOC Agent - {context.get('reason', 'Security threat')}</description>
                 </entry>
             </address>
         </set>
@@ -136,7 +136,7 @@ class PaloAltoIntegration(BaseIntegration):
         response = await self._make_request("POST", url, params=params)
         
         # Add to blocked group
-        await self._add_to_address_group(address_name, "AITIA_Blocked_IPs")
+        await self._add_to_address_group(address_name, "ThreatSentinel_Blocked_IPs")
         
         return {
             "address_object": address_name,
@@ -153,7 +153,7 @@ class PaloAltoIntegration(BaseIntegration):
         params = {
             "type": "config",
             "action": "set",
-            "xpath": f"/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='{self.vsys}']/profiles/custom-url-category/entry[@name='AITIA_Blocked_URLs']/list",
+            "xpath": f"/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='{self.vsys}']/profiles/custom-url-category/entry[@name='ThreatSentinel_Blocked_URLs']/list",
             "element": f"<member>{url}</member>",
             "key": self.api_key
         }
@@ -162,7 +162,7 @@ class PaloAltoIntegration(BaseIntegration):
         
         return {
             "url": url,
-            "category": "AITIA_Blocked_URLs",
+            "category": "ThreatSentinel_Blocked_URLs",
             "action": "blocked",
             "reference_id": response.get("msg", {}).get("line", "")
         }
@@ -188,7 +188,7 @@ class PaloAltoIntegration(BaseIntegration):
             <service><member>any</member></service>
             <application><member>any</member></application>
             <action>{action}</action>
-            <description>Created by AITIA SOC Agent</description>
+            <description>Created by ThreatSentinel SOC Agent</description>
         </entry>
         """
         
@@ -321,14 +321,14 @@ class FortinetIntegration(BaseIntegration):
     async def _block_ip(self, ip: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Block IP by adding to address object and policy"""
         # Create address object
-        address_name = f"AITIA_Blocked_{ip.replace('.', '_')}"
+        address_name = f"ThreatSentinel_Blocked_{ip.replace('.', '_')}"
         url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/firewall/address"
         
         address_data = {
             "name": address_name,
             "type": "ipmask",
             "subnet": f"{ip}/32",
-            "comment": f"Blocked by AITIA SOC Agent - {context.get('reason', 'Security threat')}"
+            "comment": f"Blocked by ThreatSentinel SOC Agent - {context.get('reason', 'Security threat')}"
         }
         
         response = await self._make_request("POST", url, json=address_data)
@@ -347,7 +347,7 @@ class FortinetIntegration(BaseIntegration):
         api_url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/webfilter/urlfilter"
         
         url_data = {
-            "name": f"AITIA_Blocked_URL_{hash(url_path) % 10000}",
+            "name": f"ThreatSentinel_Blocked_URL_{hash(url_path) % 10000}",
             "entries": [
                 {
                     "url": url_path,
@@ -355,7 +355,7 @@ class FortinetIntegration(BaseIntegration):
                     "action": "block"
                 }
             ],
-            "comment": f"Blocked by AITIA SOC Agent - {context.get('reason', 'Security threat')}"
+            "comment": f"Blocked by ThreatSentinel SOC Agent - {context.get('reason', 'Security threat')}"
         }
         
         response = await self._make_request("POST", api_url, json=url_data)
@@ -380,7 +380,7 @@ class FortinetIntegration(BaseIntegration):
             "service": [{"name": "ALL"}],
             "action": context.get("action", "deny"),
             "status": "enable",
-            "comments": "Created by AITIA SOC Agent"
+            "comments": "Created by ThreatSentinel SOC Agent"
         }
         
         response = await self._make_request("POST", url, json=policy_data)
@@ -494,7 +494,7 @@ class PfSenseIntegration(BaseIntegration):
             "interface": context.get("interface", "wan"),
             "source": {"address": ip},
             "destination": {"address": "any"},
-            "descr": f"AITIA SOC Agent Block - {context.get('reason', 'Security threat')}"
+            "descr": f"ThreatSentinel SOC Agent Block - {context.get('reason', 'Security threat')}"
         }
         
         response = await self._make_request("POST", url, json=rule_data)
@@ -517,7 +517,7 @@ class PfSenseIntegration(BaseIntegration):
             "source": {"address": context.get("source", "any")},
             "destination": {"address": context.get("destination", "any")},
             "protocol": context.get("protocol", "any"),
-            "descr": f"AITIA SOC Agent - {rule_description}"
+            "descr": f"ThreatSentinel SOC Agent - {rule_description}"
         }
         
         response = await self._make_request("POST", url, json=rule_data)

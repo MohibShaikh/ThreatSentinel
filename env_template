@@ -1,4 +1,4 @@
-# AITIA SOC Agent Configuration
+# ThreatSentinel SOC Agent Configuration
 # Copy this file to .env and update with your actual values
 
 # Server Configuration
@@ -30,7 +30,7 @@ MEMORY_DIR=data/memory
 LOGS_DIR=logs
 
 # Database (future expansion)
-# DATABASE_URL=sqlite:///./aitia_soc.db
+# DATABASE_URL=sqlite:///./ThreatSentinel_soc.db
 
 # Redis (future expansion)
 # REDIS_URL=redis://localhost:6379

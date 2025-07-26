@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent - Task Queue Management
+ThreatSentinel SOC Agent - Task Queue Management
 
 Provides priority-based task queuing, retry logic, and status tracking
 for investigation tasks to ensure reliable processing under load.

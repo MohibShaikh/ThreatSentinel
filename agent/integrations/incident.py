@@ -139,7 +139,7 @@ class ServiceNowIntegration(BaseIntegration):
             "impact": severity_map.get(severity, "3"),
             "caller_id": context.get("caller_id", ""),
             "assignment_group": context.get("assignment_group", "Security Team"),
-            "work_notes": f"Created by AITIA SOC Agent - Investigation ID: {context.get('investigation_id', '')}"
+            "work_notes": f"Created by ThreatSentinel SOC Agent - Investigation ID: {context.get('investigation_id', '')}"
         }
         
         response = await self._make_request("POST", url, json=incident_data)
@@ -194,7 +194,7 @@ class ServiceNowIntegration(BaseIntegration):
             "escalation": "1",
             "urgency": "1",  # Set to high urgency
             "impact": "1",   # Set to high impact
-            "work_notes": f"Escalated by AITIA SOC Agent: {context.get('reason', 'Automatic escalation due to risk threshold')}"
+            "work_notes": f"Escalated by ThreatSentinel SOC Agent: {context.get('reason', 'Automatic escalation due to risk threshold')}"
         }
         
         if context.get("escalation_group"):
@@ -214,7 +214,7 @@ class ServiceNowIntegration(BaseIntegration):
     def _format_description(self, context: Dict[str, Any]) -> str:
         """Format incident description"""
         description = f"""
-Security incident detected by AITIA SOC Agent
+Security incident detected by ThreatSentinel SOC Agent
 
 Investigation ID: {context.get('investigation_id', 'N/A')}
 Event Type: {context.get('event_type', 'N/A')}
@@ -370,7 +370,7 @@ class JiraIntegration(BaseIntegration):
                 },
                 "issuetype": {"name": context.get("issue_type", "Bug")},
                 "priority": {"name": priority_map.get(severity, "Medium")},
-                "labels": ["security", "aitia-soc-agent", f"severity-{severity}"]
+                "labels": ["security", "ThreatSentinel-soc-agent", f"severity-{severity}"]
             }
         }
         
@@ -428,7 +428,7 @@ class JiraIntegration(BaseIntegration):
         await self._make_request("PUT", url, json=escalation_data)
         
         # Add escalation comment
-        escalation_comment = f"Issue escalated by AITIA SOC Agent: {context.get('reason', 'Automatic escalation due to risk threshold')}"
+        escalation_comment = f"Issue escalated by ThreatSentinel SOC Agent: {context.get('reason', 'Automatic escalation due to risk threshold')}"
         await self._add_comment(issue_key, escalation_comment)
         
         # Assign to escalation team if specified
@@ -493,7 +493,7 @@ class JiraIntegration(BaseIntegration):
     
     def _format_description(self, context: Dict[str, Any]) -> str:
         """Format issue description"""
-        description = f"""Security incident detected by AITIA SOC Agent
+        description = f"""Security incident detected by ThreatSentinel SOC Agent
 
 Investigation Details:
 - Investigation ID: {context.get('investigation_id', 'N/A')}
@@ -514,7 +514,7 @@ Recommended Actions:
         for i, action in enumerate(actions[:5], 1):
             description += f"{i}. {action}\n"
         
-        description += "\nThis incident was automatically created by AITIA SOC Agent."
+        description += "\nThis incident was automatically created by ThreatSentinel SOC Agent."
         
         return description
 
@@ -685,10 +685,10 @@ class PagerDutyIntegration(BaseIntegration):
         event_data = {
             "routing_key": self.routing_key,
             "event_action": "trigger",
-            "dedup_key": context.get("investigation_id", f"aitia_{hash(message) % 10000}"),
+            "dedup_key": context.get("investigation_id", f"ThreatSentinel_{hash(message) % 10000}"),
             "payload": {
                 "summary": message,
-                "source": "AITIA SOC Agent",
+                "source": "ThreatSentinel SOC Agent",
                 "severity": severity_map.get(severity, "warning"),
                 "component": "Security",
                 "group": "SOC",
@@ -738,7 +738,7 @@ class PagerDutyIntegration(BaseIntegration):
         note_url = f"{self.api_url}/incidents/{incident_id}/notes"
         note_data = {
             "note": {
-                "content": f"Escalated by AITIA SOC Agent: {context.get('reason', 'Automatic escalation due to risk threshold')}"
+                "content": f"Escalated by ThreatSentinel SOC Agent: {context.get('reason', 'Automatic escalation due to risk threshold')}"
             }
         }
         
@@ -754,7 +754,7 @@ class PagerDutyIntegration(BaseIntegration):
     
     def _format_description(self, context: Dict[str, Any]) -> str:
         """Format incident description"""
-        description = f"""Security incident detected by AITIA SOC Agent
+        description = f"""Security incident detected by ThreatSentinel SOC Agent
 
 Investigation ID: {context.get('investigation_id', 'N/A')}
 Event Type: {context.get('event_type', 'N/A')}

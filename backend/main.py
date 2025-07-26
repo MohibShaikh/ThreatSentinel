@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent Backend - FastAPI Main Application
+ThreatSentinel SOC Agent Backend - FastAPI Main Application
 
 REST API server providing web-based access to SOC Agent functionality
 including incident investigation, report retrieval, and real-time monitoring.
@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="AITIA SOC Agent API",
+    title="ThreatSentinel SOC Agent API",
     description="Autonomous Security Operations Center Agent API",
     version="2.0.0",
     docs_url="/docs",
@@ -137,7 +137,7 @@ app.include_router(audit.router, prefix="/api/v1/audit", tags=["Audit"])
 async def root():
     """Root endpoint"""
     return {
-        "message": "AITIA SOC Agent API",
+        "message": "ThreatSentinel SOC Agent API",
         "version": "2.0.0",
         "documentation": "/docs",
         "health": "/health"

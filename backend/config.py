@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent Backend Configuration
+ThreatSentinel SOC Agent Backend Configuration
 
 Configuration management using Pydantic settings with environment variable support.
 """
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """Application settings with environment variable support"""
     
     # API Configuration
-    app_name: str = "AITIA SOC Agent API"
+    app_name: str = "ThreatSentinel SOC Agent API"
     version: str = "2.0.0"
     debug: bool = Field(default=False, env="DEBUG")
     

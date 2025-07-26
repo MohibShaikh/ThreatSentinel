@@ -1,5 +1,5 @@
 """
-AITIA SOC Agent - Reports Routes
+ThreatSentinel SOC Agent - Reports Routes
 
 API routes for generating and retrieving investigation reports.
 """
