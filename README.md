@@ -44,57 +44,165 @@ The AITIA SOC Agent follows a sophisticated autonomous workflow that mimics huma
 
 ```mermaid
 graph TB
-    A["Security Event"] --> B["SOC Agent Brain"]
-    
-    subgraph "Autonomous Agent Core"
-        B --> C["Event Classifier"]
-        C --> D["Tool Planner"]
-        D --> E["Intelligence Gatherer"]
-        E --> F["Risk Analyzer"]
-        F --> G["Action Planner"]
-        G --> H["Report Generator"]
-        H --> I["Memory Updater"]
+    subgraph "Security Event Sources"
+        SIEM_IN["SIEM Alerts"]
+        NET_MON["Network Monitoring"]
+        EDR["Endpoint Detection"]
+        THREAT_FEED["Threat Feeds"]
     end
     
-    subgraph "Tool Arsenal"
-        J["VirusTotal"]
-        K["AbuseIPDB"]
-        L["URLVoid"]
-        M["Shodan"]
+    subgraph "AITIA SOC Agent Core"
+        EVENT_CLASSIFIER["Event Classifier"]
+        PLANNER["SOC Agent Planner"]
+        INTEL_GATHERER["Intelligence Gatherer"]
+        RISK_ANALYZER["Risk Analyzer"]
+        ACTION_ENGINE["Action Engine"]
+        MEMORY["Agent Memory"]
     end
     
-    subgraph "Agent Memory"
-        N["Pattern Database"]
-        O["Investigation History"]
-        P["Learned Insights"]
+    subgraph "Integration Registry"
+        REGISTRY["Integration Registry"]
+        BASE_INT["Base Integration"]
+        ACTION_ORCHESTRATOR["Action Orchestrator"]
     end
     
-    D -.-> J
-    D -.-> K
-    D -.-> L
-    D -.-> M
+    subgraph "🔥 Firewall Integrations"
+        PALO_ALTO["Palo Alto Networks"]
+        FORTINET["Fortinet FortiGate"]
+        PFSENSE["pfSense"]
+    end
     
-    E --> N
-    F --> O
-    I --> P
+    subgraph "📊 SIEM Integrations"
+        SPLUNK["Splunk"]
+        QRADAR["IBM QRadar"]
+        SENTINEL["Azure Sentinel"]
+    end
     
-    Q["Investigation Report"] --> R["Human Analyst"]
-    H --> Q
+    subgraph "💬 Communication Integrations"
+        SLACK["Slack"]
+        TEAMS["Microsoft Teams"]
+        EMAIL["Email SMTP"]
+    end
+    
+    subgraph "🎫 Incident Response Integrations"
+        SERVICENOW["ServiceNow"]
+        JIRA["Jira"]
+        PAGERDUTY["PagerDuty"]
+    end
+    
+    subgraph "Automated Actions"
+        BLOCK_IP["Block Malicious IPs"]
+        CREATE_INCIDENT["Create Incidents"]
+        SEND_ALERTS["Send Alerts"]
+        UPDATE_RULES["Update Security Rules"]
+        ESCALATE["Escalate to Analysts"]
+    end
+    
+    subgraph "Human Oversight"
+        ANALYST["Security Analyst"]
+        MANAGER["Security Manager"]
+        AUDIT_TRAIL["Audit Trail"]
+    end
+    
+    %% Main workflow
+    SIEM_IN --> EVENT_CLASSIFIER
+    NET_MON --> EVENT_CLASSIFIER
+    EDR --> EVENT_CLASSIFIER
+    THREAT_FEED --> EVENT_CLASSIFIER
+    
+    EVENT_CLASSIFIER --> PLANNER
+    PLANNER --> INTEL_GATHERER
+    INTEL_GATHERER --> RISK_ANALYZER
+    RISK_ANALYZER --> ACTION_ENGINE
+    ACTION_ENGINE --> MEMORY
+    
+    %% Integration flow
+    ACTION_ENGINE --> REGISTRY
+    REGISTRY --> ACTION_ORCHESTRATOR
+    
+    %% Firewall actions
+    ACTION_ORCHESTRATOR --> PALO_ALTO
+    ACTION_ORCHESTRATOR --> FORTINET
+    ACTION_ORCHESTRATOR --> PFSENSE
+    
+    PALO_ALTO --> BLOCK_IP
+    FORTINET --> BLOCK_IP
+    PFSENSE --> BLOCK_IP
+    
+    %% SIEM actions
+    ACTION_ORCHESTRATOR --> SPLUNK
+    ACTION_ORCHESTRATOR --> QRADAR
+    ACTION_ORCHESTRATOR --> SENTINEL
+    
+    SPLUNK --> CREATE_INCIDENT
+    QRADAR --> CREATE_INCIDENT
+    SENTINEL --> UPDATE_RULES
+    
+    %% Communication actions
+    ACTION_ORCHESTRATOR --> SLACK
+    ACTION_ORCHESTRATOR --> TEAMS
+    ACTION_ORCHESTRATOR --> EMAIL
+    
+    SLACK --> SEND_ALERTS
+    TEAMS --> SEND_ALERTS
+    EMAIL --> SEND_ALERTS
+    
+    %% Incident Response actions
+    ACTION_ORCHESTRATOR --> SERVICENOW
+    ACTION_ORCHESTRATOR --> JIRA
+    ACTION_ORCHESTRATOR --> PAGERDUTY
+    
+    SERVICENOW --> CREATE_INCIDENT
+    JIRA --> CREATE_INCIDENT
+    PAGERDUTY --> ESCALATE
+    
+    %% Human oversight
+    PLANNER --> ANALYST
+    ESCALATE --> MANAGER
+    ACTION_ORCHESTRATOR --> AUDIT_TRAIL
+    
+    %% Memory and learning
+    MEMORY --> PLANNER
+    ANALYST --> MEMORY
+    AUDIT_TRAIL --> MEMORY
+    
+    %% Styling
+    classDef coreAgent fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef firewall fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef siem fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px
+    classDef comm fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef incident fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    classDef human fill:#fce4ec,stroke:#ad1457,stroke-width:2px
+    classDef action fill:#e0f2f1,stroke:#00695c,stroke-width:2px
+    
+    class EVENT_CLASSIFIER,PLANNER,INTEL_GATHERER,RISK_ANALYZER,ACTION_ENGINE,MEMORY coreAgent
+    class PALO_ALTO,FORTINET,PFSENSE firewall
+    class SPLUNK,QRADAR,SENTINEL siem
+    class SLACK,TEAMS,EMAIL comm
+    class SERVICENOW,JIRA,PAGERDUTY incident
+    class ANALYST,MANAGER,AUDIT_TRAIL human
+    class BLOCK_IP,CREATE_INCIDENT,SEND_ALERTS,UPDATE_RULES,ESCALATE action
 ```
 
-### Agent Workflow Explained:
+### AITIA Integration Architecture Explained:
 
-The **Autonomous Agent Core** contains the AI components that make intelligent decisions:
+The **AITIA SOC Agent Core** contains the autonomous components that make intelligent security decisions:
 
-1. **Event Classifier**: Analyzes and categorizes incoming security events
-2. **Tool Planner**: Decides which threat intelligence APIs to query and in what sequence
-3. **Intelligence Gatherer**: Executes the investigation plan across multiple data sources
-4. **Risk Analyzer**: Reasons about threat levels, impact, and context
-5. **Action Planner**: Generates strategic response recommendations with priorities
-6. **Report Generator**: Communicates findings in structured, professional reports
-7. **Memory Updater**: Learns patterns and insights for future investigations
+1. **Event Classifier**: Analyzes and categorizes incoming security events from multiple sources
+2. **SOC Agent Planner**: Orchestrates the entire investigation workflow with human oversight integration
+3. **Intelligence Gatherer**: Executes threat intelligence gathering across multiple APIs and sources
+4. **Risk Analyzer**: Performs contextual risk analysis with escalation trigger evaluation
+5. **Action Engine**: Generates and prioritizes automated response actions
+6. **Agent Memory**: Learns patterns and stores investigation history for continuous improvement
 
-The agent **autonomously decides** which tools to use, how to prioritize threats, what risk levels to assign, and which actions are most critical - making it a true autonomous agent rather than just a script.
+The **Integration Registry** serves as the central orchestration hub for executing actions across:
+
+🔥 **Firewall Integrations**: Automatically block malicious IPs/URLs/domains on Palo Alto, Fortinet, and pfSense  
+📊 **SIEM Integrations**: Create incidents, rules, and watchlists in Splunk, QRadar, and Azure Sentinel  
+💬 **Communication Integrations**: Send rich alerts and escalations via Slack, Teams, and Email  
+🎫 **Incident Response Integrations**: Auto-create tickets and alerts in ServiceNow, Jira, and PagerDuty  
+
+The agent **autonomously executes** security responses across your entire technology stack, transforming AITIA from an advisory system into a **fully operational security orchestration platform**.
 
 ## ✨ Core Features
 
