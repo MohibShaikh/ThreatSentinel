@@ -25,7 +25,7 @@ from .models import (
     HealthResponse,
     AgentStatsResponse
 )
-from .routes import investigations, reports, monitoring
+from .routes import investigations, reports, monitoring, integrations, tasks, audit
 from ..agent import SOCAgentPlanner
 
 
@@ -129,6 +129,8 @@ app.include_router(monitoring.router, prefix="/api/v1/monitoring", tags=["Monito
 # Import and include integrations router
 from backend.routes import integrations
 app.include_router(integrations.router, prefix="/api/v1/integrations", tags=["Integrations"])
+app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["Tasks"])
+app.include_router(audit.router, prefix="/api/v1/audit", tags=["Audit"])
 
 
 @app.get("/", response_model=Dict[str, str])
