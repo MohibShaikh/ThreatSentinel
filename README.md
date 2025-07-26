@@ -1,26 +1,26 @@
 # AITIA SOC Agent - Autonomous Security Operations Center
 
-🛡️ **An intelligent AI agent that acts as an automated first responder for security operations centers, providing autonomous threat investigation and response recommendations for organizations without dedicated SOC teams.**
+🛡**An intelligent AI agent that acts as an automated first responder for security operations centers, providing autonomous threat investigation and response recommendations for organizations without dedicated SOC teams.**
 
-## 💡 **Quick Use Case: From Alert to Action in 30 Seconds**
+## **Quick Use Case: From Alert to Action in 30 Seconds**
 
 **Scenario:** Your SIEM detects a suspicious IP `203.0.113.100` attempting 50 failed logins in 2 minutes.
 
-**Without AITIA:** 📞 Page analyst → ⏰ Wait for response → 🔍 Manual investigation → 📋 Research threat intel → 🤔 Assess risk → 📝 Write report → ⚡ Take action *(2-6 hours)*
+**Without AITIA:**  Page analyst → ⏰ Wait for response → 🔍 Manual investigation →  Research threat intel →  Assess risk →  Write report → Take action *(2-6 hours)*
 
-**With AITIA:** 🤖 **Automatic investigation** → 🧠 **Threat intelligence fusion** → ⚖️ **Risk assessment** → 🔥 **Auto-block on firewall** → 📨 **Slack alert to team** → 📄 **Investigation report** *(30 seconds)*
+**With AITIA:** **Automatic investigation** →  **Threat intelligence fusion** → ⚖️ **Risk assessment** → 🔥 **Auto-block on firewall** →  **Slack alert to team** → **Investigation report** *(30 seconds)*
 
-## 🤖 What is the AITIA SOC Agent?
+## What is the AITIA SOC Agent?
 
 The AITIA SOC Agent is a **single autonomous agent** that combines **tool use**, **memory**, and **planning** to investigate security events automatically. It acts like an experienced security analyst that never sleeps, analyzing threats 24/7 and providing actionable intelligence through a modern REST API.
 
-### 🎯 **Perfect For:**
+### **Perfect For:**
 - **Small/Medium Businesses** without dedicated security teams
 - **Overloaded SOC Teams** needing automated first-level triage  
 - **24/7 Security Coverage** without human analysts on-call
 - **Consistent Response Quality** eliminating human error and fatigue
 
-### 🏷️ **Why "AITIA"?**
+###  **Why "AITIA"?**
 **AITIA** (*Greek: αἰτία*) means "cause" or "reason" - the fundamental principle of investigation. Just as human analysts seek the *cause* behind security events, AITIA autonomously investigates the *reason* behind every threat.
 
 **Alternative Names for Enterprise Deployment:**
