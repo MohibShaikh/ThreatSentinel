@@ -276,8 +276,8 @@ The agent **autonomously executes** security responses across your entire techno
 ### **Step 1: Clone & Setup** ⏱️ *~2 minutes*
 ```bash
 # Clone the repository
-git clone https://github.com/MohibShaikh/ThreatSentinel-agent.git
-cd ThreatSentinel-agent
+git clone https://github.com/MohibShaikh/ThreatSentinel.git
+cd ThreatSentinel
 
 # Create and activate virtual environment
 python -m venv venv
