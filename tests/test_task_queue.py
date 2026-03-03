@@ -21,439 +21,462 @@ from agent.task_queue import (
 
 class TestTaskStatus:
     """Test TaskStatus enum"""
-    
+
     def test_task_status_values(self):
         """Test TaskStatus enum values"""
         assert TaskStatus.PENDING.value == "pending"
         assert TaskStatus.IN_PROGRESS.value == "in_progress"
         assert TaskStatus.COMPLETED.value == "completed"
         assert TaskStatus.FAILED.value == "failed"
+        assert TaskStatus.RETRYING.value == "retrying"
         assert TaskStatus.CANCELLED.value == "cancelled"
 
 
 class TestTaskPriority:
     """Test TaskPriority enum"""
-    
+
     def test_task_priority_values(self):
         """Test TaskPriority enum values"""
         assert TaskPriority.LOW.value == 1
         assert TaskPriority.MEDIUM.value == 2
         assert TaskPriority.HIGH.value == 3
         assert TaskPriority.CRITICAL.value == 4
-    
-    def test_priority_comparison(self):
-        """Test that priorities can be compared"""
-        assert TaskPriority.CRITICAL > TaskPriority.HIGH
-        assert TaskPriority.HIGH > TaskPriority.MEDIUM
-        assert TaskPriority.MEDIUM > TaskPriority.LOW
+        assert TaskPriority.EMERGENCY.value == 5
+
+    def test_priority_ordering(self):
+        """Test that priority numeric values are ordered correctly"""
+        assert TaskPriority.CRITICAL.value > TaskPriority.HIGH.value
+        assert TaskPriority.HIGH.value > TaskPriority.MEDIUM.value
+        assert TaskPriority.MEDIUM.value > TaskPriority.LOW.value
+        assert TaskPriority.EMERGENCY.value > TaskPriority.CRITICAL.value
 
 
 class TestTask:
     """Test Task dataclass"""
-    
+
     def test_task_creation(self):
         """Test basic Task creation"""
         task = Task(
-            task_id="test_task_001",
+            id="test_task_001",
             task_type="investigation",
             priority=TaskPriority.HIGH,
             payload={"event_id": "evt_001", "source_ip": "192.168.1.1"}
         )
-        
-        assert task.task_id == "test_task_001"
+
+        assert task.id == "test_task_001"
         assert task.task_type == "investigation"
         assert task.priority == TaskPriority.HIGH
         assert task.status == TaskStatus.PENDING
         assert task.retry_count == 0
+        assert task.max_retries == 3
+        assert task.timeout_seconds == 300
         assert task.payload["event_id"] == "evt_001"
         assert isinstance(task.created_at, datetime)
-    
+
     def test_task_to_dict(self):
         """Test Task serialization to dictionary"""
         task = Task(
-            task_id="test_task_002",
+            id="test_task_002",
             task_type="analysis",
             priority=TaskPriority.MEDIUM,
             payload={"data": "test"}
         )
-        
+
         task_dict = task.to_dict()
-        
-        assert task_dict["task_id"] == "test_task_002"
+
+        assert task_dict["id"] == "test_task_002"
         assert task_dict["task_type"] == "analysis"
         assert task_dict["priority"] == TaskPriority.MEDIUM.value
         assert task_dict["status"] == TaskStatus.PENDING.value
-        assert task_dict["payload"] == {"data": "test"}
-    
+        assert task_dict["payload"] == json.dumps({"data": "test"})
+        assert task_dict["retry_count"] == 0
+        assert task_dict["max_retries"] == 3
+        assert task_dict["timeout_seconds"] == 300
+
     def test_task_from_dict(self):
         """Test Task deserialization from dictionary"""
+        now = datetime.now()
         task_data = {
-            "task_id": "test_task_003",
+            "id": "test_task_003",
             "task_type": "report",
             "priority": TaskPriority.LOW.value,
             "status": TaskStatus.IN_PROGRESS.value,
-            "payload": {"report_id": "rpt_001"},
+            "payload": json.dumps({"report_id": "rpt_001"}),
             "retry_count": 2,
-            "created_at": datetime.now().isoformat(),
-            "started_at": datetime.now().isoformat(),
+            "max_retries": 3,
+            "created_at": now.isoformat(),
+            "started_at": now.isoformat(),
             "completed_at": None,
-            "error_message": None
+            "error_message": None,
+            "result": None,
+            "timeout_seconds": 300
         }
-        
+
         task = Task.from_dict(task_data)
-        
-        assert task.task_id == "test_task_003"
+
+        assert task.id == "test_task_003"
         assert task.task_type == "report"
         assert task.priority == TaskPriority.LOW
         assert task.status == TaskStatus.IN_PROGRESS
         assert task.retry_count == 2
+        assert task.payload == {"report_id": "rpt_001"}
+        assert task.started_at is not None
+
+    def test_task_roundtrip(self):
+        """Test Task serialization roundtrip via to_dict/from_dict"""
+        original = Task(
+            id="roundtrip_001",
+            task_type="scan",
+            priority=TaskPriority.CRITICAL,
+            payload={"target": "10.0.0.1"},
+            max_retries=5,
+            timeout_seconds=600
+        )
+
+        task_dict = original.to_dict()
+        restored = Task.from_dict(task_dict)
+
+        assert restored.id == original.id
+        assert restored.task_type == original.task_type
+        assert restored.priority == original.priority
+        assert restored.payload == original.payload
+        assert restored.max_retries == original.max_retries
+        assert restored.timeout_seconds == original.timeout_seconds
 
 
 class TestTaskQueue:
     """Test TaskQueue functionality"""
-    
+
     @pytest.fixture
     def temp_queue_dir(self):
         """Create temporary directory for test database"""
         with tempfile.TemporaryDirectory() as temp_dir:
             yield temp_dir
-    
+
     @pytest.fixture
     def task_queue(self, temp_queue_dir):
         """Create TaskQueue instance with temporary storage"""
         return TaskQueue(db_path=os.path.join(temp_queue_dir, "test_tasks.db"))
-    
-    @pytest.fixture
-    def sample_task(self):
-        """Create sample task for testing"""
-        return Task(
-            task_id="sample_001",
-            task_type="investigation",
-            priority=TaskPriority.HIGH,
-            payload={
-                "event_id": "evt_001",
-                "source_ip": "192.168.1.100",
-                "event_type": "suspicious_ip"
-            }
-        )
-    
+
     def test_queue_initialization(self, task_queue):
         """Test task queue initialization"""
         assert os.path.exists(task_queue.db_path)
         assert task_queue.workers == []
-        assert len(task_queue.handlers) == 0
-    
+        assert len(task_queue.task_handlers) == 0
+        assert task_queue.max_workers == 5
+
     def test_register_handler(self, task_queue):
         """Test registering task handlers"""
-        async def test_handler(task: Task):
+        async def test_handler(payload):
             return {"result": "success"}
-        
+
         task_queue.register_handler("investigation", test_handler)
-        
-        assert "investigation" in task_queue.handlers
-        assert task_queue.handlers["investigation"] == test_handler
-    
+
+        assert "investigation" in task_queue.task_handlers
+        assert task_queue.task_handlers["investigation"] == test_handler
+
     @pytest.mark.asyncio
-    async def test_add_task(self, task_queue, sample_task):
+    async def test_add_task(self, task_queue):
         """Test adding task to queue"""
-        await task_queue.add_task(sample_task)
-        
-        # Verify task was stored in database
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"event_id": "evt_001", "source_ip": "192.168.1.100"},
+            priority=TaskPriority.HIGH
+        )
+
+        assert isinstance(task_id, str)
+
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (sample_task.task_id,))
+        cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         result = cursor.fetchone()
         conn.close()
-        
+
         assert result is not None
-        assert result[1] == sample_task.task_id  # task_id column
-        assert result[2] == sample_task.task_type  # task_type column
-    
+
     @pytest.mark.asyncio
     async def test_get_next_task(self, task_queue):
         """Test retrieving next task by priority"""
-        # Add tasks with different priorities
-        low_task = Task("low_001", "test", TaskPriority.LOW, {})
-        high_task = Task("high_001", "test", TaskPriority.HIGH, {})
-        critical_task = Task("critical_001", "test", TaskPriority.CRITICAL, {})
-        
-        await task_queue.add_task(low_task)
-        await task_queue.add_task(high_task)
-        await task_queue.add_task(critical_task)
-        
-        # Should get critical task first
+        low_id = await task_queue.add_task("test", {}, TaskPriority.LOW)
+        high_id = await task_queue.add_task("test", {}, TaskPriority.HIGH)
+        critical_id = await task_queue.add_task("test", {}, TaskPriority.CRITICAL)
+
         next_task = await task_queue.get_next_task()
-        assert next_task.task_id == "critical_001"
+        assert next_task is not None
+        assert next_task.id == critical_id
         assert next_task.priority == TaskPriority.CRITICAL
-        
-        # Mark as in progress and get next
-        await task_queue.update_task_status(next_task.task_id, TaskStatus.IN_PROGRESS)
-        
+        assert next_task.status == TaskStatus.IN_PROGRESS
+
         next_task = await task_queue.get_next_task()
-        assert next_task.task_id == "high_001"
+        assert next_task is not None
+        assert next_task.id == high_id
         assert next_task.priority == TaskPriority.HIGH
-    
+
     @pytest.mark.asyncio
-    async def test_update_task_status(self, task_queue, sample_task):
-        """Test updating task status"""
-        await task_queue.add_task(sample_task)
-        
-        # Update to in progress
-        await task_queue.update_task_status(sample_task.task_id, TaskStatus.IN_PROGRESS)
-        
-        # Verify update
-        conn = sqlite3.connect(task_queue.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT status FROM tasks WHERE task_id = ?", (sample_task.task_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        assert result[0] == TaskStatus.IN_PROGRESS.value
-    
-    @pytest.mark.asyncio
-    async def test_complete_task(self, task_queue, sample_task):
+    async def test_complete_task(self, task_queue):
         """Test completing a task"""
-        await task_queue.add_task(sample_task)
-        
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"event_id": "evt_001"},
+            priority=TaskPriority.HIGH
+        )
+
         result = {"status": "success", "findings": ["test"]}
-        await task_queue.complete_task(sample_task.task_id, result)
-        
-        # Verify task is marked as completed
+        await task_queue.complete_task(task_id, result)
+
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT status, result FROM tasks WHERE task_id = ?", (sample_task.task_id,))
+        cursor.execute("SELECT status, result FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
         conn.close()
-        
+
         assert row[0] == TaskStatus.COMPLETED.value
         assert json.loads(row[1]) == result
-    
+
     @pytest.mark.asyncio
-    async def test_fail_task_with_retry(self, task_queue, sample_task):
+    async def test_fail_task_with_retry(self, task_queue):
         """Test failing task with retry logic"""
-        await task_queue.add_task(sample_task)
-        
-        # Fail task (should retry)
-        await task_queue.fail_task(sample_task.task_id, "Test error", max_retries=3)
-        
-        # Verify task is back to pending with incremented retry count
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"event_id": "evt_001"},
+            priority=TaskPriority.HIGH,
+            max_retries=3
+        )
+
+        await task_queue.fail_task(task_id, "Test error")
+
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT status, retry_count FROM tasks WHERE task_id = ?", (sample_task.task_id,))
+        cursor.execute("SELECT status, retry_count FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
         conn.close()
-        
-        assert row[0] == TaskStatus.PENDING.value
-        assert row[1] == 1  # retry count incremented
-    
+
+        assert row[0] == TaskStatus.RETRYING.value
+        assert row[1] == 1
+
     @pytest.mark.asyncio
-    async def test_fail_task_max_retries(self, task_queue, sample_task):
+    async def test_fail_task_max_retries(self, task_queue):
         """Test failing task that exceeds max retries"""
-        sample_task.retry_count = 3  # Already at max retries
-        await task_queue.add_task(sample_task)
-        
-        # Fail task (should not retry)
-        await task_queue.fail_task(sample_task.task_id, "Test error", max_retries=3)
-        
-        # Verify task is marked as failed
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"event_id": "evt_001"},
+            priority=TaskPriority.HIGH,
+            max_retries=1
+        )
+
+        await task_queue.fail_task(task_id, "Error 1")
+
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT status FROM tasks WHERE task_id = ?", (sample_task.task_id,))
+        cursor.execute("SELECT status, retry_count FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
         conn.close()
-        
+
         assert row[0] == TaskStatus.FAILED.value
-    
+
     @pytest.mark.asyncio
-    async def test_cancel_task(self, task_queue, sample_task):
+    async def test_cancel_task(self, task_queue):
         """Test cancelling a task"""
-        await task_queue.add_task(sample_task)
-        
-        await task_queue.cancel_task(sample_task.task_id)
-        
-        # Verify task is cancelled
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"event_id": "evt_001"},
+            priority=TaskPriority.HIGH
+        )
+
+        result = await task_queue.cancel_task(task_id)
+        assert result is True
+
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT status FROM tasks WHERE task_id = ?", (sample_task.task_id,))
+        cursor.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
         conn.close()
-        
+
         assert row[0] == TaskStatus.CANCELLED.value
-    
+
     @pytest.mark.asyncio
-    async def test_get_task_status(self, task_queue, sample_task):
+    async def test_cancel_nonexistent_task(self, task_queue):
+        """Test cancelling a task that doesn't exist returns False"""
+        result = await task_queue.cancel_task("nonexistent_id")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_get_task_status(self, task_queue):
         """Test retrieving task status"""
-        await task_queue.add_task(sample_task)
-        
-        task_info = await task_queue.get_task_status(sample_task.task_id)
-        
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"event_id": "evt_001"},
+            priority=TaskPriority.HIGH
+        )
+
+        task_info = await task_queue.get_task_status(task_id)
+
         assert task_info is not None
-        assert task_info.task_id == sample_task.task_id
+        assert task_info.id == task_id
         assert task_info.status == TaskStatus.PENDING
-    
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_nonexistent(self, task_queue):
+        """Test retrieving status for a task that doesn't exist"""
+        task_info = await task_queue.get_task_status("nonexistent_id")
+        assert task_info is None
+
     @pytest.mark.asyncio
     async def test_get_queue_stats(self, task_queue):
         """Test getting queue statistics"""
-        # Add tasks with different statuses
-        tasks = [
-            Task("pending_1", "test", TaskPriority.LOW, {}),
-            Task("pending_2", "test", TaskPriority.HIGH, {}),
-            Task("completed_1", "test", TaskPriority.MEDIUM, {}),
-        ]
-        
-        for task in tasks:
-            await task_queue.add_task(task)
-        
-        # Mark one as completed
-        await task_queue.complete_task("completed_1", {"result": "done"})
-        
+        await task_queue.add_task("test", {}, TaskPriority.LOW)
+        await task_queue.add_task("test", {}, TaskPriority.HIGH)
+        task_id_3 = await task_queue.add_task("test", {}, TaskPriority.MEDIUM)
+
+        await task_queue.complete_task(task_id_3, {"result": "done"})
+
         stats = await task_queue.get_queue_stats()
-        
-        assert stats["total_tasks"] >= 3
-        assert stats["pending"] >= 2
-        assert stats["completed"] >= 1
-        assert stats["in_progress"] >= 0
-    
+
+        assert "status_counts" in stats
+        assert "pending_tasks" in stats
+        assert "active_tasks" in stats
+        assert "task_type_counts" in stats
+        assert "max_workers" in stats
+        assert stats["pending_tasks"] >= 2
+        assert stats["max_workers"] == 5
+
     @pytest.mark.asyncio
     async def test_cleanup_old_tasks(self, task_queue):
         """Test cleanup of old completed tasks"""
-        # Add old completed task
-        old_task = Task("old_completed", "test", TaskPriority.LOW, {})
-        await task_queue.add_task(old_task)
-        await task_queue.complete_task(old_task.task_id, {"result": "done"})
-        
-        # Manually update timestamp to be old
-        old_timestamp = datetime.now() - timedelta(days=40)
+        task_id_old = await task_queue.add_task("test", {}, TaskPriority.LOW)
+        await task_queue.complete_task(task_id_old, {"result": "done"})
+
+        old_timestamp = (datetime.now() - timedelta(days=40)).isoformat()
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE tasks SET completed_at = ? WHERE task_id = ?",
-            (old_timestamp.isoformat(), old_task.task_id)
+            "UPDATE tasks SET created_at = ? WHERE id = ?",
+            (old_timestamp, task_id_old)
         )
         conn.commit()
         conn.close()
-        
-        # Add recent task
-        recent_task = Task("recent_completed", "test", TaskPriority.LOW, {})
-        await task_queue.add_task(recent_task)
-        await task_queue.complete_task(recent_task.task_id, {"result": "done"})
-        
-        # Cleanup old tasks (older than 30 days)
+
+        task_id_recent = await task_queue.add_task("test", {}, TaskPriority.LOW)
+        await task_queue.complete_task(task_id_recent, {"result": "done"})
+
         deleted_count = await task_queue.cleanup_old_tasks(days=30)
-        
+
         assert deleted_count >= 1
-        
-        # Verify old task was deleted
+
         conn = sqlite3.connect(task_queue.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM tasks WHERE task_id = ?", (old_task.task_id,))
+        cursor.execute("SELECT COUNT(*) FROM tasks WHERE id = ?", (task_id_old,))
         count = cursor.fetchone()[0]
         conn.close()
-        
+
         assert count == 0
-    
+
     @pytest.mark.asyncio
     async def test_worker_processing(self, task_queue):
         """Test worker task processing"""
-        # Register a test handler
-        async def test_handler(task: Task):
-            await asyncio.sleep(0.1)  # Simulate work
-            return {"processed": True, "task_id": task.task_id}
-        
+        async def test_handler(payload):
+            await asyncio.sleep(0.1)
+            return {"processed": True}
+
         task_queue.register_handler("investigation", test_handler)
-        
-        # Add a task
-        task = Task("worker_test", "investigation", TaskPriority.HIGH, {"data": "test"})
-        await task_queue.add_task(task)
-        
-        # Start workers
-        await task_queue.start_workers(num_workers=1)
-        
-        # Wait for processing
-        await asyncio.sleep(0.5)
-        
-        # Check task was completed
-        task_info = await task_queue.get_task_status("worker_test")
+
+        task_id = await task_queue.add_task(
+            task_type="investigation",
+            payload={"data": "test"},
+            priority=TaskPriority.HIGH
+        )
+
+        await task_queue.start()
+
+        await asyncio.sleep(1.0)
+
+        task_info = await task_queue.get_task_status(task_id)
         assert task_info.status == TaskStatus.COMPLETED
-        
-        # Stop workers
-        await task_queue.stop_workers()
-    
+
+        await task_queue.stop()
+
     @pytest.mark.asyncio
     async def test_worker_error_handling(self, task_queue):
         """Test worker error handling"""
-        # Register a handler that raises an exception
-        async def failing_handler(task: Task):
+        async def failing_handler(payload):
             raise Exception("Handler failed")
-        
+
         task_queue.register_handler("failing_task", failing_handler)
-        
-        # Add a task
-        task = Task("error_test", "failing_task", TaskPriority.HIGH, {})
-        await task_queue.add_task(task)
-        
-        # Start workers
-        await task_queue.start_workers(num_workers=1)
-        
-        # Wait for processing
-        await asyncio.sleep(0.5)
-        
-        # Check task failed or was retried
-        task_info = await task_queue.get_task_status("error_test")
-        assert task_info.status in [TaskStatus.FAILED, TaskStatus.PENDING]
-        
-        # Stop workers
-        await task_queue.stop_workers()
-    
+
+        task_id = await task_queue.add_task(
+            task_type="failing_task",
+            payload={},
+            priority=TaskPriority.HIGH,
+            max_retries=1
+        )
+
+        await task_queue.start()
+
+        await asyncio.sleep(2.0)
+
+        task_info = await task_queue.get_task_status(task_id)
+        assert task_info.status in [TaskStatus.FAILED, TaskStatus.RETRYING]
+
+        await task_queue.stop()
+
     @pytest.mark.asyncio
     async def test_concurrent_task_processing(self, task_queue):
         """Test concurrent processing of multiple tasks"""
-        # Register handler
-        async def concurrent_handler(task: Task):
+        async def concurrent_handler(payload):
             await asyncio.sleep(0.1)
-            return {"task_id": task.task_id, "processed": True}
-        
+            return {"processed": True}
+
         task_queue.register_handler("concurrent", concurrent_handler)
-        
-        # Add multiple tasks
-        tasks = [
-            Task(f"concurrent_{i}", "concurrent", TaskPriority.MEDIUM, {"id": i})
-            for i in range(5)
-        ]
-        
-        for task in tasks:
-            await task_queue.add_task(task)
-        
-        # Start multiple workers
-        await task_queue.start_workers(num_workers=3)
-        
-        # Wait for processing
-        await asyncio.sleep(1)
-        
-        # Check all tasks completed
-        stats = await task_queue.get_queue_stats()
-        assert stats["completed"] >= 5
-        
-        # Stop workers
-        await task_queue.stop_workers()
+
+        task_ids = []
+        for i in range(5):
+            tid = await task_queue.add_task("concurrent", {"id": i}, TaskPriority.MEDIUM)
+            task_ids.append(tid)
+
+        await task_queue.start()
+
+        await asyncio.sleep(3.0)
+
+        completed_count = 0
+        for tid in task_ids:
+            info = await task_queue.get_task_status(tid)
+            if info.status == TaskStatus.COMPLETED:
+                completed_count += 1
+
+        assert completed_count == 5
+
+        await task_queue.stop()
+
+    @pytest.mark.asyncio
+    async def test_process_task_no_handler(self, task_queue):
+        """Test that processing a task with no registered handler raises"""
+        task = Task(
+            id="no_handler_001",
+            task_type="unknown_type",
+            priority=TaskPriority.LOW,
+            payload={}
+        )
+        with pytest.raises(ValueError, match="No handler registered"):
+            await task_queue.process_task(task)
 
 
 class TestTaskQueueIntegration:
     """Integration tests for task queue system"""
-    
+
+    @pytest.fixture
+    def temp_queue_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            yield temp_dir
+
     @pytest.mark.asyncio
     async def test_real_investigation_workflow(self, temp_queue_dir):
         """Test task queue with realistic investigation workflow"""
         queue = TaskQueue(db_path=os.path.join(temp_queue_dir, "workflow_test.db"))
-        
-        # Simulate investigation handler
-        async def investigation_handler(task: Task):
-            event_id = task.payload.get("event_id")
-            source_ip = task.payload.get("source_ip")
-            
-            # Simulate investigation work
+
+        async def investigation_handler(payload):
+            event_id = payload.get("event_id")
+            source_ip = payload.get("source_ip")
             await asyncio.sleep(0.1)
-            
             return {
                 "event_id": event_id,
                 "source_ip": source_ip,
@@ -461,81 +484,70 @@ class TestTaskQueueIntegration:
                 "risk_score": 0.75,
                 "indicators": ["malicious_activity"]
             }
-        
+
         queue.register_handler("investigation", investigation_handler)
-        
-        # Add investigation tasks with different priorities
-        critical_event = Task(
-            "inv_critical_001",
-            "investigation",
-            TaskPriority.CRITICAL,
-            {
+
+        critical_id = await queue.add_task(
+            task_type="investigation",
+            payload={
                 "event_id": "evt_001",
                 "source_ip": "192.168.1.100",
                 "event_type": "suspicious_ip",
                 "severity": "critical"
-            }
+            },
+            priority=TaskPriority.CRITICAL
         )
-        
-        normal_event = Task(
-            "inv_normal_001",
-            "investigation",
-            TaskPriority.MEDIUM,
-            {
-                "event_id": "evt_002", 
+
+        normal_id = await queue.add_task(
+            task_type="investigation",
+            payload={
+                "event_id": "evt_002",
                 "source_ip": "10.0.0.50",
                 "event_type": "port_scan",
                 "severity": "medium"
-            }
+            },
+            priority=TaskPriority.MEDIUM
         )
-        
-        await queue.add_task(normal_event)
-        await queue.add_task(critical_event)  # Add critical after normal
-        
-        # Start workers
-        await queue.start_workers(num_workers=2)
-        
-        # Wait for processing
-        await asyncio.sleep(0.5)
-        
-        # Verify critical event was processed first
-        critical_result = await queue.get_task_status("inv_critical_001")
-        normal_result = await queue.get_task_status("inv_normal_001")
-        
+
+        await queue.start()
+
+        await asyncio.sleep(2.0)
+
+        critical_result = await queue.get_task_status(critical_id)
+        normal_result = await queue.get_task_status(normal_id)
+
         assert critical_result.status == TaskStatus.COMPLETED
         assert normal_result.status == TaskStatus.COMPLETED
-        
-        # Verify results contain expected data
-        critical_task_result = json.loads(critical_result.result)
-        assert critical_task_result["risk_score"] == 0.75
-        
-        await queue.stop_workers()
-    
+
+        assert critical_result.result["risk_score"] == 0.75
+
+        await queue.stop()
+
     @pytest.mark.asyncio
     async def test_queue_persistence_across_restarts(self, temp_queue_dir):
         """Test that tasks persist across queue restarts"""
         db_path = os.path.join(temp_queue_dir, "persistence_test.db")
-        
-        # Create first queue instance and add tasks
+
         queue1 = TaskQueue(db_path=db_path)
-        
-        task = Task("persist_001", "test", TaskPriority.HIGH, {"data": "persistent"})
-        await queue1.add_task(task)
-        
-        # Create second queue instance (simulating restart)
+
+        task_id = await queue1.add_task(
+            task_type="test",
+            payload={"data": "persistent"},
+            priority=TaskPriority.HIGH
+        )
+
         queue2 = TaskQueue(db_path=db_path)
-        
-        # Verify task persists
-        task_info = await queue2.get_task_status("persist_001")
+
+        task_info = await queue2.get_task_status(task_id)
         assert task_info is not None
-        assert task_info.task_id == "persist_001"
+        assert task_info.id == task_id
         assert task_info.priority == TaskPriority.HIGH
 
 
 # CLI Mock Demonstrations
 class TestTaskQueueCLIMockInteractions:
     """Mock CLI interactions for task queue testing"""
-    
+
     @pytest.mark.mock
     def test_queue_stats_cli_mock(self):
         """Mock CLI interaction for queue statistics"""
@@ -570,7 +582,7 @@ class TestTaskQueueCLIMockInteractions:
             },
             "last_updated": "2024-07-27T14:35:00Z"
         }, indent=2))
-    
+
     @pytest.mark.mock
     def test_queue_add_task_cli_mock(self):
         """Mock CLI interaction for adding task"""
@@ -593,7 +605,7 @@ class TestTaskQueueCLIMockInteractions:
             "message": "Task successfully added to queue",
             "estimated_start_time": "2024-07-27T14:38:30Z"
         }, indent=2))
-    
+
     @pytest.mark.mock
     def test_queue_worker_management_cli_mock(self):
         """Mock CLI interaction for worker management"""
@@ -621,4 +633,4 @@ class TestTaskQueueCLIMockInteractions:
                 "available_capacity": "good"
             },
             "timestamp": "2024-07-27T14:37:00Z"
-        }, indent=2)) 
+        }, indent=2))

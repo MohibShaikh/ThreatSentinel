@@ -1,6 +1,8 @@
 # ThreatSentinel SOC Agent - Autonomous Security Operations Center
 
-🛡**An intelligent AI agent that acts as an automated first responder for security operations centers, providing autonomous threat investigation and response recommendations for organizations without dedicated SOC teams.**
+[![CI](https://github.com/MohibShaikh/ThreatSentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/MohibShaikh/ThreatSentinel/actions/workflows/ci.yml)
+
+**An intelligent AI agent that acts as an automated first responder for security operations centers, providing autonomous threat investigation and response recommendations for organizations without dedicated SOC teams.**
 
 ## **Quick Use Case: From Alert to Action in 30 Seconds**
 
@@ -33,32 +35,43 @@ The ThreatSentinel SOC Agent is a **single autonomous agent** that combines **to
 ## 🏗️ Architecture Overview
 
 ```
-ThreatSentinel-agent/
-├── agent/                    # Core agent logic (LLM, tools, planner)
-│   ├── __init__.py
+ThreatSentinel/
+├── agent/                    # Core agent logic
 │   ├── planner.py            # Decision flow using autonomous reasoning
 │   ├── tools.py              # Tool definitions: Shodan, VirusTotal, etc.
 │   ├── memory.py             # Vector memory (SQLite + patterns)
-│   └── reporter.py           # Generates final incident report
+│   ├── reporter.py           # Generates final incident report
+│   ├── task_queue.py         # Priority-based task queue with persistence
+│   ├── action_logger.py      # Comprehensive action logging & audit
+│   └── integrations/         # Modular SOC tool integrations
+│       ├── base.py           # Abstract base for all integrations
+│       ├── firewall.py       # Palo Alto, Fortinet, pfSense
+│       ├── siem.py           # Splunk, QRadar, Azure Sentinel
+│       ├── communication.py  # Slack, Teams, Email
+│       ├── incident.py       # ServiceNow, Jira, PagerDuty
+│       └── registry.py       # Central integration orchestrator
 │
-├── backend/                  # FastAPI backend for agent access
-│   ├── main.py               # API server + endpoints
+├── backend/                  # FastAPI backend
+│   ├── main.py               # API server + lifespan management
 │   ├── routes/               # Organized API routes
 │   │   ├── investigations.py # Investigation management
 │   │   ├── reports.py        # Report generation/retrieval
-│   │   └── monitoring.py     # Real-time metrics & health
-│   ├── models.py             # Pydantic data models
-│   └── config.py             # Configuration management
+│   │   ├── monitoring.py     # Real-time metrics & health
+│   │   ├── integrations.py   # Integration management
+│   │   ├── tasks.py          # Task queue management
+│   │   └── audit.py          # Audit & compliance
+│   ├── models.py             # Pydantic v2 data models
+│   └── config.py             # pydantic-settings configuration
 │
-├── data/                     # Sample inputs, logs, or config files
-│   └── sample_events.json
+├── frontend/                 # React dashboard
 │
-├── reports/                  # Output incident reports (Markdown/JSON)
-│   └── example_report.md
+├── tests/                    # 153 passing tests
 │
+├── .github/workflows/ci.yml  # CI: Python 3.10-3.12, lint, Docker
+├── Dockerfile                # Production container
+├── docker-compose.yml        # Full stack deployment
 ├── requirements.txt
 ├── main_api.py               # Main API entry point
-├── README.md
 └── env_template              # Environment variables template
 ```
 
@@ -279,16 +292,19 @@ The agent **autonomously executes** security responses across your entire techno
 git clone https://github.com/MohibShaikh/ThreatSentinel.git
 cd ThreatSentinel
 
-# Create and activate virtual environment
-python -m venv venv
+# Create virtual environment (uv recommended, pip works too)
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
 
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
+# Or with plain pip:
+# python -m venv .venv && source .venv/bin/activate
+# pip install -r requirements.txt
+```
 
-# Install dependencies
-pip install -r requirements.txt
+### **Alternative: Docker** ⏱️ *~2 minutes*
+```bash
+docker compose up -d
+# API at http://localhost:8000, frontend at http://localhost:3000
 ```
 
 ### **Step 2: Configuration** ⏱️ *~1 minute*
@@ -604,8 +620,8 @@ export DEBUG=true
 # Run with auto-reload
 python main_api.py
 
-# Run tests
-pytest
+# Run tests (153 tests)
+pytest tests/ -v
 
 # Run with specific log level
 LOG_LEVEL=DEBUG python main_api.py

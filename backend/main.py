@@ -26,7 +26,7 @@ from .models import (
     AgentStatsResponse
 )
 from .routes import investigations, reports, monitoring, integrations, tasks, audit
-from ..agent import SOCAgentPlanner
+from agent import SOCAgentPlanner
 
 
 # Global agent instance
@@ -125,12 +125,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 app.include_router(investigations.router, prefix="/api/v1/investigations", tags=["Investigations"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(monitoring.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
-
-# Import and include integrations router
-from backend.routes import integrations
 app.include_router(integrations.router, prefix="/api/v1/integrations", tags=["Integrations"])
-app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["Tasks"])
-app.include_router(audit.router, prefix="/api/v1/audit", tags=["Audit"])
+app.include_router(tasks.router, prefix="/api/v1", tags=["Tasks"])
+app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
 
 @app.get("/", response_model=Dict[str, str])

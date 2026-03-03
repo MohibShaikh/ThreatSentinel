@@ -6,7 +6,7 @@ Pydantic models for API request and response validation.
 
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from enum import Enum
 
 
@@ -36,36 +36,32 @@ class InvestigationRequest(BaseModel):
     priority: Optional[str] = Field(default="normal", description="Investigation priority")
     user_context: Optional[Dict[str, Any]] = Field(default=None, description="Additional user context")
     
-    @validator('event_data')
+    @field_validator('event_data')
+    @classmethod
     def validate_event_data(cls, v):
-        """Validate that event_data contains required fields"""
         if not isinstance(v, dict):
             raise ValueError("event_data must be a dictionary")
-        
-        # Require at least an event_type
         if 'event_type' not in v:
             raise ValueError("event_data must contain 'event_type' field")
-        
         return v
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "event_data": {
-                    "event_type": "suspicious_ip",
-                    "source_ip": "192.168.1.100",
-                    "user_agent": "Mozilla/5.0...",
-                    "payload": {
-                        "failed_login_attempts": 25,
-                        "accessed_endpoints": ["/admin", "/login"],
-                        "time_window": "10 minutes"
-                    },
-                    "timestamp": "2024-01-15T10:30:00Z"
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "event_data": {
+                "event_type": "suspicious_ip",
+                "source_ip": "192.168.1.100",
+                "user_agent": "Mozilla/5.0...",
+                "payload": {
+                    "failed_login_attempts": 25,
+                    "accessed_endpoints": ["/admin", "/login"],
+                    "time_window": "10 minutes"
                 },
-                "emergency_mode": False,
-                "priority": "normal"
-            }
+                "timestamp": "2024-01-15T10:30:00Z"
+            },
+            "emergency_mode": False,
+            "priority": "normal"
         }
+    })
 
 
 class InvestigationResponse(BaseModel):
@@ -75,17 +71,16 @@ class InvestigationResponse(BaseModel):
     message: str = Field(..., description="Human-readable status message")
     estimated_completion_time: datetime = Field(..., description="Estimated completion time")
     priority: str = Field(..., description="Investigation priority level")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "investigation_id": "inv_20240115_103000_1234",
-                "status": "started",
-                "message": "Investigation started successfully",
-                "estimated_completion_time": "2024-01-15T10:35:00Z",
-                "priority": "normal"
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "investigation_id": "inv_20240115_103000_1234",
+            "status": "started",
+            "message": "Investigation started successfully",
+            "estimated_completion_time": "2024-01-15T10:35:00Z",
+            "priority": "normal"
         }
+    })
 
 
 class InvestigationStatus(BaseModel):
@@ -97,19 +92,18 @@ class InvestigationStatus(BaseModel):
     progress_percentage: int = Field(default=0, ge=0, le=100, description="Progress percentage")
     estimated_time_remaining: int = Field(default=0, description="Estimated seconds remaining")
     preliminary_risk_level: Optional[str] = Field(default=None, description="Preliminary risk assessment")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "investigation_id": "inv_20240115_103000_1234",
-                "status": "running",
-                "start_time": "2024-01-15T10:30:00Z",
-                "current_phase": "intelligence_gathering",
-                "progress_percentage": 60,
-                "estimated_time_remaining": 45,
-                "preliminary_risk_level": "medium"
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "investigation_id": "inv_20240115_103000_1234",
+            "status": "running",
+            "start_time": "2024-01-15T10:30:00Z",
+            "current_phase": "intelligence_gathering",
+            "progress_percentage": 60,
+            "estimated_time_remaining": 45,
+            "preliminary_risk_level": "medium"
         }
+    })
 
 
 class ActionRecommendation(BaseModel):
@@ -164,19 +158,18 @@ class HealthResponse(BaseModel):
     memory_investigations: Optional[int] = Field(default=0, description="Total investigations in memory")
     active_investigations: Optional[int] = Field(default=0, description="Currently active investigations")
     error: Optional[str] = Field(default=None, description="Error message if unhealthy")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "status": "healthy",
-                "timestamp": "2024-01-15T10:30:00Z",
-                "version": "2.0.0",
-                "agent_status": "healthy",
-                "available_tools": 4,
-                "memory_investigations": 150,
-                "active_investigations": 2
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "status": "healthy",
+            "timestamp": "2024-01-15T10:30:00Z",
+            "version": "2.0.0",
+            "agent_status": "healthy",
+            "available_tools": 4,
+            "memory_investigations": 150,
+            "active_investigations": 2
         }
+    })
 
 
 class AgentStatsResponse(BaseModel):
@@ -195,9 +188,9 @@ class ReportRequest(BaseModel):
     format: str = Field(default="json", description="Report format (json, markdown, html)")
     include_raw_data: bool = Field(default=False, description="Include raw intelligence data")
     
-    @validator('format')
+    @field_validator('format')
+    @classmethod
     def validate_format(cls, v):
-        """Validate report format"""
         allowed_formats = ['json', 'markdown', 'html']
         if v.lower() not in allowed_formats:
             raise ValueError(f"Format must be one of: {allowed_formats}")
@@ -247,13 +240,13 @@ class EventSubscription(BaseModel):
 
 class BulkInvestigationRequest(BaseModel):
     """Request model for bulk investigation submission"""
-    events: List[Dict[str, Any]] = Field(..., min_items=1, max_items=100, description="List of events to investigate")
+    events: List[Dict[str, Any]] = Field(..., min_length=1, max_length=100, description="List of events to investigate")
     emergency_mode: bool = Field(default=False, description="Process all events in emergency mode")
     batch_id: Optional[str] = Field(default=None, description="Optional batch identifier")
-    
-    @validator('events')
+
+    @field_validator('events')
+    @classmethod
     def validate_events(cls, v):
-        """Validate that each event has required fields"""
         for event in v:
             if not isinstance(event, dict) or 'event_type' not in event:
                 raise ValueError("Each event must be a dictionary with 'event_type' field")

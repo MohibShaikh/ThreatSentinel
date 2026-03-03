@@ -451,16 +451,25 @@ class SOCAgentPlanner:
         valid_results = [r for r in intel_results if not isinstance(r, Exception)]
         
         for result in valid_results:
-            if result and result.get('success'):
-                processed['sources'].append(result.get('source', 'unknown'))
-                if 'reputation_score' in result:
-                    processed['reputation_score'] = max(processed['reputation_score'], 
-                                                       result['reputation_score'])
-                if 'indicators' in result:
-                    processed['threat_indicators'].extend(result['indicators'])
+            if result is None:
+                continue
+            # Handle both dict and ToolResult dataclass objects
+            success = result.get('success') if isinstance(result, dict) else getattr(result, 'success', False)
+            source = result.get('source', 'unknown') if isinstance(result, dict) else getattr(result, 'source', 'unknown')
+            data = result if isinstance(result, dict) else getattr(result, 'data', {})
+            
+            if success:
+                processed['sources'].append(source)
+                rep_score = data.get('reputation_score', 0) if isinstance(data, dict) else 0
+                if rep_score:
+                    processed['reputation_score'] = max(processed['reputation_score'], rep_score)
+                indicators = data.get('indicators', []) if isinstance(data, dict) else []
+                if indicators:
+                    processed['threat_indicators'].extend(indicators)
         
         if valid_results:
-            processed['confidence'] = len(valid_results) / (len(valid_results) + len([r for r in intel_results if isinstance(r, Exception)]))
+            error_count = len([r for r in intel_results if isinstance(r, Exception)])
+            processed['confidence'] = len(valid_results) / (len(valid_results) + error_count)
         
         return processed
     

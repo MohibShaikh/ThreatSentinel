@@ -8,13 +8,14 @@ Provides endpoints for:
 - Action log querying and filtering
 """
 
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from agent.action_logger import ActionLogger, ActionType, LogLevel
+from agent.action_logger import ActionLog, ActionLogger, ActionType, LogLevel
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -186,9 +187,6 @@ async def search_action_logs(
     # In a real implementation, you'd add proper filtering to the ActionLogger class
     since = datetime.now() - timedelta(hours=since_hours)
     
-    # For now, get recent logs and filter in Python (not efficient for large datasets)
-    import sqlite3
-    
     query = """
         SELECT * FROM action_logs 
         WHERE timestamp > ?
@@ -223,8 +221,7 @@ async def search_action_logs(
                 columns = [desc[0] for desc in cursor.description]
                 log_data = dict(zip(columns, row))
                 
-                # Convert to ActionLog and then to response
-                action_log = logger.__class__.ActionLog.from_dict(log_data)
+                action_log = ActionLog.from_dict(log_data)
                 results.append(ActionLogResponse(
                     id=action_log.id,
                     timestamp=action_log.timestamp.isoformat(),

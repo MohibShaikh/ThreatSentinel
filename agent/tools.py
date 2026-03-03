@@ -70,7 +70,7 @@ class VirusTotalTool(BaseTool):
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         super().__init__(api_key, config)
         self.base_url = "https://www.virustotal.com/vtapi/v2"
-        self.rate_limit = config.get('rate_limit', 4)  # requests per minute
+        self.rate_limit = self.config.get('rate_limit', 4)  # requests per minute
         
     async def query_ip(self, ip: str) -> ToolResult:
         """Query IP reputation from VirusTotal"""

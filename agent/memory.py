@@ -14,8 +14,6 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import sqlite3
-import numpy as np
-from collections import defaultdict, Counter
 
 
 @dataclass
@@ -535,6 +533,43 @@ class AgentMemory:
         
         self.logger.debug(f"Updated patterns for {event_type}")
     
+    async def mark_false_positive(self, investigation_id: str, notes: str = "") -> bool:
+        """Mark an investigation as a false positive for future learning."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE investigations SET false_positive = 1, outcome = ? WHERE event_id = ?",
+                    (f"false_positive: {notes}", investigation_id),
+                )
+                conn.commit()
+            self.logger.info(f"Marked {investigation_id} as false positive")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to mark false positive: {e}")
+            return False
+
+    async def add_missed_indicators(self, investigation_id: str, indicators: list) -> bool:
+        """Record indicators that were missed during the original analysis."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT event_data FROM investigations WHERE event_id = ?",
+                    (investigation_id,),
+                ).fetchone()
+                if row:
+                    data = json.loads(row[0])
+                    data["missed_indicators"] = indicators
+                    conn.execute(
+                        "UPDATE investigations SET event_data = ? WHERE event_id = ?",
+                        (json.dumps(data), investigation_id),
+                    )
+                    conn.commit()
+            self.logger.info(f"Added {len(indicators)} missed indicators to {investigation_id}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to add missed indicators: {e}")
+            return False
+
     async def cleanup_old_memories(self, days_to_keep: int = 365) -> int:
         """Clean up old memories to manage storage"""
         try:

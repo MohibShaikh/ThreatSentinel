@@ -6,7 +6,8 @@ Configuration management using Pydantic settings with environment variable suppo
 
 import os
 from typing import Optional
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 
@@ -71,10 +72,11 @@ class Settings(BaseSettings):
     health_check_interval: int = Field(default=60, env="HEALTH_CHECK_INTERVAL")  # seconds
     metrics_enabled: bool = Field(default=True, env="METRICS_ENABLED")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -121,19 +123,16 @@ class DevelopmentSettings(Settings):
     """Development-specific settings"""
     debug: bool = True
     log_level: str = "DEBUG"
-    
-    class Config:
-        env_file = ".env.dev"
+
+    model_config = SettingsConfigDict(env_file=".env.dev")
 
 
-# Production settings
 class ProductionSettings(Settings):
     """Production-specific settings"""
     debug: bool = False
     log_level: str = "WARNING"
-    
-    class Config:
-        env_file = ".env.prod"
+
+    model_config = SettingsConfigDict(env_file=".env.prod")
 
 
 def get_settings_for_environment(environment: str = None) -> Settings:
