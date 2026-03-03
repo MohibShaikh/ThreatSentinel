@@ -6,11 +6,9 @@ firewalls, SIEMs, communication tools, and incident response platforms.
 """
 
 import pytest
-import asyncio
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
 
 from agent.integrations.base import (
     BaseIntegration, IntegrationType, ActionType, ActionResult, IntegrationResponse
@@ -524,7 +522,7 @@ class TestIntegrationRegistry:
         for integration in registry.integrations.values():
             integration.connect = AsyncMock(return_value=True)
 
-        results = await registry.connect_all()
+        await registry.connect_all()
 
         for integration in registry.integrations.values():
             integration.connect.assert_called_once()
@@ -536,7 +534,7 @@ class TestIntegrationRegistry:
             integration.disconnect = AsyncMock(return_value=True)
             registry.active_integrations[name] = integration
 
-        results = await registry.disconnect_all()
+        await registry.disconnect_all()
 
         assert len(registry.active_integrations) == 0
 

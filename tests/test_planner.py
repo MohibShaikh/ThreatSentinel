@@ -3,11 +3,8 @@ Unit tests for agent/planner.py
 """
 
 import pytest
-import tempfile
-import json
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
+from unittest.mock import AsyncMock
 
 from agent.planner import SOCAgentPlanner, InvestigationContext, InvestigationPhase
 

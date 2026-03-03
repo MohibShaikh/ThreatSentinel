@@ -5,7 +5,6 @@ Unit tests for agent/reporter.py
 import pytest
 import tempfile
 import os
-import json
 from datetime import datetime
 from types import SimpleNamespace
 

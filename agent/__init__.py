@@ -23,13 +23,13 @@ from .action_logger import ActionLogger, ActionType, LogLevel
 
 __all__ = [
     "SOCAgentPlanner",
-    "ToolRegistry", 
+    "ToolRegistry",
     "AgentMemory",
     "IncidentReporter",
     "TaskQueue",
-    "TaskPriority", 
+    "TaskPriority",
     "TaskStatus",
     "ActionLogger",
     "ActionType",
     "LogLevel"
-] 
+]

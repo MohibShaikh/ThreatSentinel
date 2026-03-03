@@ -4,9 +4,7 @@ Unit tests for agent/memory.py
 
 import pytest
 import tempfile
-import os
 import sqlite3
-import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 

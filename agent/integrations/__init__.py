@@ -40,7 +40,7 @@ from .registry import IntegrationRegistry
 
 __all__ = [
     'BaseIntegration',
-    'IntegrationResponse', 
+    'IntegrationResponse',
     'IntegrationType',
     'ActionResult',
     'SplunkIntegration',
@@ -58,4 +58,4 @@ __all__ = [
     'IntegrationRegistry'
 ]
 
-__version__ = "1.0.0" 
+__version__ = "1.0.0"

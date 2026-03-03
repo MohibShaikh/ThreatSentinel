@@ -5,7 +5,6 @@ SOC Agent Demo - Simulation showing autonomous investigation via SOCAgentPlanner
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Dict, List
 
 from agent.planner import SOCAgentPlanner

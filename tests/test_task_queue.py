@@ -12,7 +12,6 @@ import os
 import sqlite3
 import json
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent.task_queue import (
     TaskQueue, Task, TaskStatus, TaskPriority
@@ -197,7 +196,7 @@ class TestTaskQueue:
     @pytest.mark.asyncio
     async def test_get_next_task(self, task_queue):
         """Test retrieving next task by priority"""
-        low_id = await task_queue.add_task("test", {}, TaskPriority.LOW)
+        await task_queue.add_task("test", {}, TaskPriority.LOW)
         high_id = await task_queue.add_task("test", {}, TaskPriority.HIGH)
         critical_id = await task_queue.add_task("test", {}, TaskPriority.CRITICAL)
 

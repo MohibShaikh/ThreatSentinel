@@ -5,10 +5,9 @@ REST API server providing web-based access to SOC Agent functionality
 including incident investigation, report retrieval, and real-time monitoring.
 """
 
-import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
@@ -17,10 +16,10 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
-from .config import Settings, get_settings
+from .config import get_settings
 from .models import (
-    InvestigationRequest, 
-    InvestigationResponse, 
+    InvestigationRequest,
+    InvestigationResponse,
     InvestigationStatus,
     HealthResponse,
     AgentStatsResponse
@@ -41,10 +40,10 @@ security = HTTPBearer(auto_error=False)
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup/shutdown"""
     global soc_agent
-    
+
     # Startup
     settings = get_settings()
-    
+
     try:
         # Initialize SOC Agent
         agent_config = {
@@ -65,16 +64,16 @@ async def lifespan(app: FastAPI):
             'emergency_threshold': settings.emergency_threshold,
             'max_investigation_time': settings.max_investigation_time
         }
-        
+
         soc_agent = SOCAgentPlanner(agent_config)
         logging.info("SOC Agent initialized successfully")
-        
+
     except Exception as e:
         logging.error(f"Failed to initialize SOC Agent: {e}")
         raise
-    
+
     yield
-    
+
     # Shutdown
     logging.info("Shutting down SOC Agent backend")
 
@@ -115,7 +114,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     """Simple token-based authentication (implement as needed)"""
     if credentials is None:
         return None  # Allow unauthenticated access for demo
-    
+
     # Implement token validation here
     # For demo purposes, accept any token
     return {"user_id": "demo_user"}
@@ -147,11 +146,11 @@ async def health_check(agent: SOCAgentPlanner = Depends(get_soc_agent)):
     try:
         # Check agent status
         agent_status = "healthy"
-        
+
         # Get basic stats
         tool_count = len(agent.tools.get_available_tools())
         memory_stats = await agent.memory.get_memory_stats()
-        
+
         return HealthResponse(
             status="healthy",
             timestamp=datetime.utcnow(),
@@ -161,7 +160,7 @@ async def health_check(agent: SOCAgentPlanner = Depends(get_soc_agent)):
             memory_investigations=memory_stats.get('total_investigations', 0),
             active_investigations=len(active_investigations)
         )
-        
+
     except Exception as e:
         logging.error(f"Health check failed: {e}")
         return HealthResponse(
@@ -179,7 +178,7 @@ async def get_agent_stats(agent: SOCAgentPlanner = Depends(get_soc_agent)):
     try:
         memory_stats = await agent.memory.get_memory_stats()
         tool_capabilities = agent.tools.get_tool_capabilities()
-        
+
         return AgentStatsResponse(
             memory_stats=memory_stats,
             tool_capabilities=tool_capabilities,
@@ -188,7 +187,7 @@ async def get_agent_stats(agent: SOCAgentPlanner = Depends(get_soc_agent)):
             risk_distribution=memory_stats.get('by_risk_level', {}),
             avg_investigation_time=memory_stats.get('avg_investigation_duration_seconds', 0.0)
         )
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -205,14 +204,14 @@ async def investigate_event(
 ):
     """
     Submit a security event for investigation
-    
+
     This endpoint accepts security event data and triggers an autonomous
     investigation using the SOC Agent's analysis pipeline.
     """
     try:
         # Generate investigation ID
         investigation_id = f"inv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(request.event_data)) % 10000}"
-        
+
         # Store investigation request
         active_investigations[investigation_id] = {
             'id': investigation_id,
@@ -221,7 +220,7 @@ async def investigate_event(
             'request': request,
             'user': current_user
         }
-        
+
         # Start investigation in background
         background_tasks.add_task(
             run_investigation,
@@ -229,7 +228,7 @@ async def investigate_event(
             request.event_data,
             request.emergency_mode
         )
-        
+
         return InvestigationResponse(
             investigation_id=investigation_id,
             status="started",
@@ -237,7 +236,7 @@ async def investigate_event(
             estimated_completion_time=datetime.utcnow(),
             priority="emergency" if request.emergency_mode else "normal"
         )
-        
+
     except Exception as e:
         logging.error(f"Investigation request failed: {e}")
         raise HTTPException(
@@ -254,9 +253,9 @@ async def get_investigation_status(investigation_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Investigation not found"
         )
-    
+
     investigation = active_investigations[investigation_id]
-    
+
     return InvestigationStatus(
         investigation_id=investigation_id,
         status=investigation['status'],
@@ -276,30 +275,30 @@ async def get_investigation_result(investigation_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Investigation not found"
         )
-    
+
     investigation = active_investigations[investigation_id]
-    
+
     if investigation['status'] != 'completed':
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Investigation not completed. Current status: {investigation['status']}"
         )
-    
+
     return investigation.get('result', {})
 
 
 async def run_investigation(investigation_id: str, event_data: Dict[str, Any], emergency_mode: bool = False):
     """Background task to run the investigation"""
     global soc_agent, active_investigations
-    
+
     try:
         # Update status
         active_investigations[investigation_id]['status'] = 'running'
         active_investigations[investigation_id]['current_phase'] = 'initial_assessment'
-        
+
         # Run investigation
         result = await soc_agent.investigate_incident(event_data, emergency_mode)
-        
+
         # Update with results
         active_investigations[investigation_id].update({
             'status': 'completed',
@@ -308,9 +307,9 @@ async def run_investigation(investigation_id: str, event_data: Dict[str, Any], e
             'current_phase': 'completed',
             'progress': 100
         })
-        
+
         logging.info(f"Investigation {investigation_id} completed successfully")
-        
+
     except Exception as e:
         logging.error(f"Investigation {investigation_id} failed: {e}")
         active_investigations[investigation_id].update({
@@ -354,7 +353,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    
+
     # Run the server
     uvicorn.run(
         "backend.main:app",
@@ -362,4 +361,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         log_level="info"
-    ) 
+    )

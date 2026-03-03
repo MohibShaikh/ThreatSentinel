@@ -259,5 +259,5 @@ class TestActionLogger:
         assert deleted >= 1
 
         remaining = action_logger.get_investigation_logs(inv_id)
-        ids = [l.id for l in remaining]
+        ids = [entry.id for entry in remaining]
         assert log_id not in ids

@@ -5,7 +5,7 @@ Pydantic models for API request and response validation.
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from enum import Enum
 
@@ -35,7 +35,7 @@ class InvestigationRequest(BaseModel):
     emergency_mode: bool = Field(default=False, description="Enable emergency investigation mode")
     priority: Optional[str] = Field(default="normal", description="Investigation priority")
     user_context: Optional[Dict[str, Any]] = Field(default=None, description="Additional user context")
-    
+
     @field_validator('event_data')
     @classmethod
     def validate_event_data(cls, v):
@@ -187,7 +187,7 @@ class ReportRequest(BaseModel):
     investigation_id: str = Field(..., description="Investigation ID to generate report for")
     format: str = Field(default="json", description="Report format (json, markdown, html)")
     include_raw_data: bool = Field(default=False, description="Include raw intelligence data")
-    
+
     @field_validator('format')
     @classmethod
     def validate_format(cls, v):
@@ -296,12 +296,12 @@ class ValidationErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
     status_code: int = Field(..., description="HTTP status code")
     timestamp: datetime = Field(..., description="Error timestamp")
-    validation_errors: List[Dict[str, Any]] = Field(..., description="Detailed validation errors") 
+    validation_errors: List[Dict[str, Any]] = Field(..., description="Detailed validation errors")
 
 class ReviewStatus(str, Enum):
     """Review status for human oversight"""
     PENDING_REVIEW = "pending_review"
-    UNDER_REVIEW = "under_review" 
+    UNDER_REVIEW = "under_review"
     APPROVED = "approved"
     REJECTED = "rejected"
     NEEDS_ESCALATION = "needs_escalation"
@@ -370,4 +370,4 @@ class EscalationRule(BaseModel):
     enabled: bool = True
     conditions: Dict[str, Any]  # risk_threshold, confidence_threshold, event_types, etc.
     priority: ReviewPriority
-    notify_channels: List[str] = []  # email, slack, teams, etc. 
+    notify_channels: List[str] = []  # email, slack, teams, etc.

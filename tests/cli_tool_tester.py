@@ -6,17 +6,15 @@ A comprehensive tool for testing and demonstrating all CLI interactions
 with ThreatSentinel components without requiring API keys or real data.
 """
 
-import asyncio
 import json
-import sys
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 import argparse
 
 # Mock data generators
 class MockDataGenerator:
     """Generates realistic mock data for demonstrations"""
-    
+
     @staticmethod
     def generate_ip_reputation_data(ip: str) -> Dict[str, Any]:
         """Generate mock IP reputation data"""
@@ -35,7 +33,7 @@ class MockDataGenerator:
             },
             "timestamp": datetime.now().isoformat()
         }
-    
+
     @staticmethod
     def generate_memory_stats() -> Dict[str, Any]:
         """Generate mock memory statistics"""
@@ -59,7 +57,7 @@ class MockDataGenerator:
             "oldest_record": "2024-01-20T08:15:00Z",
             "newest_record": datetime.now().isoformat()
         }
-    
+
     @staticmethod
     def generate_task_queue_stats() -> Dict[str, Any]:
         """Generate mock task queue statistics"""
@@ -93,7 +91,7 @@ class MockDataGenerator:
             },
             "last_updated": datetime.now().isoformat()
         }
-    
+
     @staticmethod
     def generate_integration_status() -> Dict[str, Any]:
         """Generate mock integration status"""
@@ -131,36 +129,36 @@ class MockDataGenerator:
 
 class ThreatSentinelCLITester:
     """Main CLI tester for ThreatSentinel components"""
-    
+
     def __init__(self):
         self.data_generator = MockDataGenerator()
-    
+
     def print_header(self, title: str):
         """Print formatted header"""
         print(f"\n{'='*60}")
         print(f"  {title}")
         print(f"{'='*60}")
-    
+
     def print_command(self, command: str):
         """Print formatted command"""
-        print(f"\n🔧 Command:")
+        print("\n🔧 Command:")
         print(f"   {command}")
-        print(f"\n📊 Response:")
-    
+        print("\n📊 Response:")
+
     def print_json_response(self, data: Dict[str, Any]):
         """Print formatted JSON response"""
         print(json.dumps(data, indent=2, ensure_ascii=False))
-    
+
     # Tool-specific testers
     def test_virustotal_tool(self):
         """Test VirusTotal tool CLI interactions"""
         self.print_header("VirusTotal Tool CLI Tests")
-        
+
         # IP reputation query
         self.print_command("python -m agent.tools virustotal query_ip 192.168.1.100")
         ip_data = self.data_generator.generate_ip_reputation_data("192.168.1.100")
         self.print_json_response(ip_data)
-        
+
         # URL reputation query
         self.print_command("python -m agent.tools virustotal query_url https://suspicious-site.com")
         url_data = {
@@ -179,7 +177,7 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(url_data)
-        
+
         # File hash query
         self.print_command("python -m agent.tools virustotal query_hash a1b2c3d4e5f67890abcdef1234567890")
         hash_data = {
@@ -198,11 +196,11 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(hash_data)
-    
+
     def test_abuseipdb_tool(self):
         """Test AbuseIPDB tool CLI interactions"""
         self.print_header("AbuseIPDB Tool CLI Tests")
-        
+
         self.print_command("python -m agent.tools abuseipdb query_ip 10.0.0.100")
         abuse_data = {
             "success": True,
@@ -222,11 +220,11 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(abuse_data)
-    
+
     def test_shodan_tool(self):
         """Test Shodan tool CLI interactions"""
         self.print_header("Shodan Tool CLI Tests")
-        
+
         self.print_command("python -m agent.tools shodan query_ip 203.0.113.45")
         shodan_data = {
             "success": True,
@@ -247,11 +245,11 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(shodan_data)
-    
+
     def test_tool_registry(self):
         """Test ToolRegistry CLI interactions"""
         self.print_header("Tool Registry CLI Tests")
-        
+
         # Aggregated IP reputation query
         self.print_command("python -m agent.tools registry query_ip 192.168.1.100")
         registry_data = {
@@ -273,7 +271,7 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(registry_data)
-        
+
         # Tool capabilities
         self.print_command("python -m agent.tools registry capabilities")
         capabilities_data = {
@@ -286,22 +284,22 @@ class ThreatSentinelCLITester:
             },
             "tool_status": {
                 "virustotal": "active",
-                "abuseipdb": "active", 
+                "abuseipdb": "active",
                 "shodan": "active",
                 "urlvoid": "rate_limited"
             }
         }
         self.print_json_response(capabilities_data)
-    
+
     def test_memory_system(self):
         """Test memory system CLI interactions"""
         self.print_header("Agent Memory CLI Tests")
-        
+
         # Memory statistics
         self.print_command("python -m agent.memory stats")
         memory_stats = self.data_generator.generate_memory_stats()
         self.print_json_response(memory_stats)
-        
+
         # Search similar events
         self.print_command("python -m agent.memory search --event-type suspicious_ip --limit 3")
         search_data = {
@@ -338,7 +336,7 @@ class ThreatSentinelCLITester:
             "query_timestamp": datetime.now().isoformat()
         }
         self.print_json_response(search_data)
-        
+
         # Pattern insights
         self.print_command("python -m agent.memory patterns --type frequency_anomaly")
         pattern_data = {
@@ -366,16 +364,16 @@ class ThreatSentinelCLITester:
             "analysis_timestamp": datetime.now().isoformat()
         }
         self.print_json_response(pattern_data)
-    
+
     def test_task_queue_system(self):
         """Test task queue system CLI interactions"""
         self.print_header("Task Queue System CLI Tests")
-        
+
         # Queue statistics
         self.print_command("python -m agent.task_queue stats")
         queue_stats = self.data_generator.generate_task_queue_stats()
         self.print_json_response(queue_stats)
-        
+
         # Add high-priority task
         self.print_command("python -m agent.task_queue add --type investigation --priority critical --payload '{\"event_id\":\"evt_001\",\"source_ip\":\"192.168.1.100\"}'")
         add_task_data = {
@@ -395,7 +393,7 @@ class ThreatSentinelCLITester:
             "estimated_start_time": datetime.now().isoformat()
         }
         self.print_json_response(add_task_data)
-        
+
         # Worker management
         self.print_command("python -m agent.task_queue workers --action start --count 8")
         worker_data = {
@@ -418,16 +416,16 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(worker_data)
-    
+
     def test_integration_system(self):
         """Test integration system CLI interactions"""
         self.print_header("Integration System CLI Tests")
-        
+
         # Integration status
         self.print_command("python -m agent.integrations status")
         integration_status = self.data_generator.generate_integration_status()
         self.print_json_response(integration_status)
-        
+
         # Execute action across integrations
         self.print_command("python -m agent.integrations execute --action BLOCK_IP --target 192.168.1.100 --reason 'Malicious activity detected'")
         action_data = {
@@ -446,7 +444,7 @@ class ThreatSentinelCLITester:
                 },
                 {
                     "integration": "fortinet",
-                    "status": "success", 
+                    "status": "success",
                     "message": "IP added to blocked address group",
                     "execution_time_ms": 187
                 }
@@ -460,11 +458,11 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(action_data)
-    
+
     def test_investigation_workflow(self):
         """Test complete investigation workflow"""
         self.print_header("Complete Investigation Workflow")
-        
+
         # Start investigation
         self.print_command("python -m agent.planner investigate --event-file data/sample_events.json --event-id evt_001")
         investigation_data = {
@@ -487,7 +485,7 @@ class ThreatSentinelCLITester:
             "timestamp": datetime.now().isoformat()
         }
         self.print_json_response(investigation_data)
-        
+
         # Get investigation status
         self.print_command("python -m agent.planner status --investigation-id inv_2024_2342")
         status_data = {
@@ -496,7 +494,7 @@ class ThreatSentinelCLITester:
             "progress": 100,
             "phases": {
                 "threat_intelligence": "completed",
-                "risk_assessment": "completed", 
+                "risk_assessment": "completed",
                 "action_planning": "completed",
                 "execution": "completed"
             },
@@ -511,12 +509,12 @@ class ThreatSentinelCLITester:
             "completed_at": datetime.now().isoformat()
         }
         self.print_json_response(status_data)
-    
+
     def run_all_tests(self):
         """Run all CLI tests"""
         print("🚀 ThreatSentinel CLI Tool Tester")
         print("Testing all components with mock data...")
-        
+
         # Run all individual tests
         self.test_virustotal_tool()
         self.test_abuseipdb_tool()
@@ -526,7 +524,7 @@ class ThreatSentinelCLITester:
         self.test_task_queue_system()
         self.test_integration_system()
         self.test_investigation_workflow()
-        
+
         # Summary
         self.print_header("Test Summary")
         print("✅ All CLI tool tests completed successfully!")
@@ -558,18 +556,18 @@ Examples:
   python tests/cli_tool_tester.py --component memory # Test only memory
         """
     )
-    
+
     parser.add_argument(
         "--component",
         choices=["tools", "memory", "queue", "integrations", "workflow", "all"],
         default="all",
         help="Specific component to test"
     )
-    
+
     args = parser.parse_args()
-    
+
     tester = ThreatSentinelCLITester()
-    
+
     if args.component == "tools":
         tester.test_virustotal_tool()
         tester.test_abuseipdb_tool()
@@ -588,4 +586,4 @@ Examples:
 
 
 if __name__ == "__main__":
-    main() 
+    main()

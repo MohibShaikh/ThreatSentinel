@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from datetime import datetime
 
-from backend.main import get_soc_agent, get_current_user
-from agent.integrations.base import ActionType, IntegrationType
+from backend.main import get_current_user
+from agent.integrations.base import ActionType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,9 +59,9 @@ async def list_integrations(
             # Initialize integration registry from SOC agent
             from agent.integrations.registry import IntegrationRegistry
             integration_registry = IntegrationRegistry({})
-        
+
         status = integration_registry.get_registry_status()
-        
+
         return {
             "integrations": status["integration_status"],
             "summary": {
@@ -70,7 +70,7 @@ async def list_integrations(
                 "capabilities": status["capabilities"]
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error listing integrations: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list integrations: {str(e)}")
@@ -86,7 +86,7 @@ async def get_integration_types(
     try:
         from agent.integrations.registry import IntegrationRegistry
         return IntegrationRegistry.get_available_integration_types()
-        
+
     except Exception as e:
         logger.error(f"Error getting integration types: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get integration types: {str(e)}")
@@ -101,7 +101,7 @@ async def get_action_types(
     """
     try:
         return [action.value for action in ActionType]
-        
+
     except Exception as e:
         logger.error(f"Error getting action types: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get action types: {str(e)}")
@@ -119,18 +119,18 @@ async def get_integration(
         global integration_registry
         if not integration_registry:
             raise HTTPException(status_code=404, detail="Integration registry not initialized")
-        
+
         integration = integration_registry.get_integration(integration_name)
         if not integration:
             raise HTTPException(status_code=404, detail=f"Integration {integration_name} not found")
-        
+
         return {
             "name": integration_name,
             "type": integration.integration_type.value,
             "status": integration.get_status(),
             "supported_actions": [action.value for action in integration.get_supported_actions()]
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -150,15 +150,15 @@ async def test_integration(
         global integration_registry
         if not integration_registry:
             raise HTTPException(status_code=404, detail="Integration registry not initialized")
-        
+
         test_result = await integration_registry.test_integration(integration_name)
-        
+
         return {
             "integration_name": integration_name,
             "test_result": test_result,
             "tested_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Error testing integration {integration_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to test integration: {str(e)}")
@@ -177,21 +177,21 @@ async def execute_action(
         global integration_registry
         if not integration_registry:
             raise HTTPException(status_code=404, detail="Integration registry not initialized")
-        
+
         # Add audit context
         audit_context = {
             **request.context,
             "executed_by": current_user,
             "executed_at": datetime.utcnow().isoformat()
         }
-        
+
         response = await integration_registry.execute_action(
             action_type=request.action_type,
             target=request.target,
             context=audit_context,
             preferred_integrations=request.preferred_integrations
         )
-        
+
         return {
             "action_type": request.action_type.value,
             "target": request.target,
@@ -214,7 +214,7 @@ async def execute_action(
                 for action in response.actions_executed
             ]
         }
-        
+
     except Exception as e:
         logger.error(f"Error executing action: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to execute action: {str(e)}")
@@ -233,7 +233,7 @@ async def execute_bulk_actions(
         global integration_registry
         if not integration_registry:
             raise HTTPException(status_code=404, detail="Integration registry not initialized")
-        
+
         # Add audit context
         audit_context = {
             **request.context,
@@ -241,17 +241,17 @@ async def execute_bulk_actions(
             "executed_at": datetime.utcnow().isoformat(),
             "bulk_execution": True
         }
-        
+
         responses = await integration_registry.execute_response_actions(
             recommended_actions=request.actions,
             context=audit_context
         )
-        
+
         # Aggregate results
         total_actions = len(responses)
         successful_actions = len([r for r in responses if r.success])
         total_execution_time = sum(r.total_execution_time for r in responses)
-        
+
         return {
             "bulk_execution_id": f"bulk_{hash(str(request.actions)) % 100000}",
             "summary": {
@@ -272,7 +272,7 @@ async def execute_bulk_actions(
                 for response in responses
             ]
         }
-        
+
     except Exception as e:
         logger.error(f"Error executing bulk actions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to execute bulk actions: {str(e)}")
@@ -290,9 +290,9 @@ async def get_action_capabilities(
         global integration_registry
         if not integration_registry:
             raise HTTPException(status_code=404, detail="Integration registry not initialized")
-        
+
         supporting_integrations = integration_registry.get_integrations_by_action(action_type)
-        
+
         capabilities = []
         for integration in supporting_integrations:
             capabilities.append({
@@ -301,13 +301,13 @@ async def get_action_capabilities(
                 "connected": integration.is_connected,
                 "status": integration.get_status()
             })
-        
+
         return {
             "action_type": action_type.value,
             "supporting_integrations": len(capabilities),
             "capabilities": capabilities
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting capabilities for {action_type}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get capabilities: {str(e)}")
@@ -326,12 +326,12 @@ async def connect_integrations(
         if not integration_registry:
             from agent.integrations.registry import IntegrationRegistry
             integration_registry = IntegrationRegistry({})
-        
+
         connection_results = await integration_registry.connect_all()
-        
+
         successful_connections = len([r for r in connection_results.values() if r])
         total_integrations = len(connection_results)
-        
+
         return {
             "message": "Connection process completed",
             "summary": {
@@ -342,7 +342,7 @@ async def connect_integrations(
             "connection_results": connection_results,
             "connected_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Error connecting integrations: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to connect integrations: {str(e)}")
@@ -359,15 +359,15 @@ async def disconnect_integrations(
         global integration_registry
         if not integration_registry:
             return {"message": "No active integrations to disconnect"}
-        
+
         disconnection_results = await integration_registry.disconnect_all()
-        
+
         return {
             "message": "Disconnection process completed",
             "disconnection_results": disconnection_results,
             "disconnected_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Error disconnecting integrations: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to disconnect integrations: {str(e)}")
@@ -384,10 +384,10 @@ async def health_check_integrations(
         global integration_registry
         if not integration_registry:
             return {"message": "Integration registry not initialized", "healthy_integrations": 0}
-        
+
         health_results = await integration_registry._health_check()
         healthy_count = len([r for r in health_results.values() if r])
-        
+
         return {
             "health_check_completed": True,
             "total_integrations": len(health_results),
@@ -396,7 +396,7 @@ async def health_check_integrations(
             "health_results": health_results,
             "checked_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Error performing health check: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to perform health check: {str(e)}")
@@ -414,7 +414,7 @@ async def get_integration_logs(
     try:
         # This is a mock implementation
         # In production, this would fetch actual logs from logging system
-        
+
         mock_logs = [
             {
                 "timestamp": datetime.utcnow().isoformat(),
@@ -429,14 +429,14 @@ async def get_integration_logs(
                 "details": {"response_time": "0.25s"}
             }
         ]
-        
+
         return {
             "integration_name": integration_name,
             "logs": mock_logs[:limit],
             "total_logs": len(mock_logs),
             "fetched_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting logs for {integration_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get logs: {str(e)}")
@@ -453,7 +453,7 @@ async def get_integration_metrics(
     try:
         # Mock metrics implementation
         # In production, this would fetch actual metrics from monitoring system
-        
+
         mock_metrics = {
             "timeframe": timeframe,
             "total_actions_executed": 156,
@@ -473,12 +473,12 @@ async def get_integration_metrics(
                 "notify": 26
             }
         }
-        
+
         return {
             "metrics": mock_metrics,
             "collected_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting integration metrics: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
