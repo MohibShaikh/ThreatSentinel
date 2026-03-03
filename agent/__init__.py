@@ -20,6 +20,7 @@ from .memory import AgentMemory
 from .reporter import IncidentReporter
 from .task_queue import TaskQueue, TaskPriority, TaskStatus
 from .action_logger import ActionLogger, ActionType, LogLevel
+from .llm import create_llm_provider
 
 __all__ = [
     "SOCAgentPlanner",
@@ -31,5 +32,6 @@ __all__ = [
     "TaskStatus",
     "ActionLogger",
     "ActionType",
-    "LogLevel"
+    "LogLevel",
+    "create_llm_provider",
 ]

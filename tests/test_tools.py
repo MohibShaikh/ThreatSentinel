@@ -206,9 +206,14 @@ class TestURLVoidTool:
     @pytest.mark.asyncio
     async def test_query_url_success(self, urlvoid_tool):
         """Test successful URL reputation query"""
+        xml_body = """<?xml version="1.0"?>
+        <response><detections>3</detections><engines><count>40</count></engines>
+        <ip>93.184.216.34</ip><country_name>United States</country_name></response>"""
+
         with patch('aiohttp.ClientSession.get') as mock_get:
             mock_resp = AsyncMock()
             mock_resp.status = 200
+            mock_resp.text = AsyncMock(return_value=xml_body)
             mock_get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
 
             async with urlvoid_tool:
@@ -216,6 +221,8 @@ class TestURLVoidTool:
 
             assert result.success is True
             assert result.source == "urlvoid"
+            assert result.data['reputation_score'] == 3 / 40
+            assert any("3/40" in ind for ind in result.data['indicators'])
 
     @pytest.mark.asyncio
     async def test_query_ip_not_supported(self, urlvoid_tool):
@@ -255,8 +262,8 @@ class TestShodanTool:
 
             assert result.success is True
             assert result.source == "shodan"
-            assert "Open ports: 4" in result.data["indicators"]
-            assert "Known vulnerabilities: 1" in result.data["indicators"]
+            assert any("Open ports: 4" in ind for ind in result.data["indicators"])
+            assert any("CVE-2021-1234" in ind for ind in result.data["indicators"])
 
     @pytest.mark.asyncio
     async def test_query_url_not_supported(self, shodan_tool):
@@ -312,10 +319,13 @@ class TestToolRegistry:
     @pytest.mark.asyncio
     async def test_query_ip_reputation_aggregation(self, registry):
         """Test IP reputation aggregation from multiple sources"""
-        # Mock individual tool results
         vt_result = ToolResult(True, "virustotal", {"reputation_score": 0.8, "indicators": ["VT indicator"]})
         abuse_result = ToolResult(True, "abuseipdb", {"reputation_score": 0.6, "indicators": ["Abuse indicator"]})
         shodan_result = ToolResult(True, "shodan", {"reputation_score": 0.4, "indicators": ["Shodan indicator"]})
+
+        for tool in registry.tools.values():
+            tool.__aenter__ = AsyncMock(return_value=tool)
+            tool.__aexit__ = AsyncMock(return_value=None)
 
         with patch.object(registry.tools["virustotal"], "query_ip", return_value=vt_result), \
              patch.object(registry.tools["abuseipdb"], "query_ip", return_value=abuse_result), \
@@ -325,16 +335,18 @@ class TestToolRegistry:
 
             assert result.success is True
             assert result.source == "registry"
-            assert result.data["reputation_score"] == 0.8  # Maximum of all scores
+            assert result.data["reputation_score"] == 0.8
             assert len(result.data["indicators"]) == 3
-            assert result.data["confidence"] == 1.0  # All queries successful
+            assert result.data["confidence"] == 1.0
 
     @pytest.mark.asyncio
     async def test_query_with_no_available_tools(self):
-        """Test querying when no tools are available"""
-        empty_registry = ToolRegistry({})  # No API keys
+        """Test querying when no tools are available for a given source list"""
+        empty_registry = ToolRegistry({})
 
-        result = await empty_registry.query_ip_reputation("192.168.1.1")
+        result = await empty_registry.query_ip_reputation(
+            "192.168.1.1", sources=["nonexistent_tool"]
+        )
 
         assert result.success is False
         assert "No tools available" in result.error
@@ -345,15 +357,19 @@ class TestToolRegistry:
         vt_result = ToolResult(True, "virustotal", {"reputation_score": 0.8, "indicators": ["VT indicator"]})
         abuse_error = ToolResult(False, "abuseipdb", {}, error="API error")
 
+        for tool in registry.tools.values():
+            tool.__aenter__ = AsyncMock(return_value=tool)
+            tool.__aexit__ = AsyncMock(return_value=None)
+
         with patch.object(registry.tools["virustotal"], "query_ip", return_value=vt_result), \
              patch.object(registry.tools["abuseipdb"], "query_ip", return_value=abuse_error), \
              patch.object(registry.tools["shodan"], "query_ip", side_effect=Exception("Network error")):
 
             result = await registry.query_ip_reputation("192.168.1.1")
 
-            assert result.success is True  # At least one tool succeeded
-            assert result.data["confidence"] < 1.0  # Not all tools succeeded
-            assert len(result.data["sources_queried"]) == 1  # Only VT succeeded
+            assert result.success is True
+            assert result.data["confidence"] < 1.0
+            assert len(result.data["sources_queried"]) == 1
 
 
 class TestToolIntegration:
@@ -380,18 +396,22 @@ class TestToolIntegration:
         }
         registry = ToolRegistry(api_keys)
 
-        # Mock successful responses for both tools
         vt_result = ToolResult(True, "virustotal", {"reputation_score": 0.5, "indicators": []})
         abuse_result = ToolResult(True, "abuseipdb", {"reputation_score": 0.3, "indicators": []})
+        shodan_result = ToolResult(True, "shodan", {"reputation_score": 0.1, "indicators": []})
+
+        for tool in registry.tools.values():
+            tool.__aenter__ = AsyncMock(return_value=tool)
+            tool.__aexit__ = AsyncMock(return_value=None)
 
         with patch.object(registry.tools["virustotal"], "query_ip", return_value=vt_result), \
-             patch.object(registry.tools["abuseipdb"], "query_ip", return_value=abuse_result):
+             patch.object(registry.tools["abuseipdb"], "query_ip", return_value=abuse_result), \
+             patch.object(registry.tools["shodan"], "query_ip", return_value=shodan_result):
 
-            # This should work without issues
             result = await registry.query_ip_reputation("192.168.1.1")
 
             assert result.success is True
-            assert len(result.data["sources_queried"]) == 2
+            assert len(result.data["sources_queried"]) == 3
 
 
 # CLI Mock Demonstrations

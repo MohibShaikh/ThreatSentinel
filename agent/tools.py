@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import ipaddress
 import validators
+from .mock_intel import get_mock_response
 
 
 @dataclass
@@ -33,11 +34,14 @@ class ToolResult:
 class BaseTool(ABC):
     """Abstract base class for all security tools"""
 
+    TOOL_NAME = "base"
+
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         self.api_key = api_key
         self.config = config or {}
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self._session = None
+        self.use_mocks = not bool(api_key) or self.config.get("use_mocks", False)
 
     async def __aenter__(self):
         self._session = aiohttp.ClientSession()
@@ -66,17 +70,62 @@ class BaseTool(ABC):
 class VirusTotalTool(BaseTool):
     """VirusTotal API integration for threat intelligence"""
 
+    TOOL_NAME = "virustotal"
+
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         super().__init__(api_key, config)
         self.base_url = "https://www.virustotal.com/vtapi/v2"
-        self.rate_limit = self.config.get('rate_limit', 4)  # requests per minute
+        self.rate_limit = self.config.get('rate_limit', 4)
+        self._rate_interval = 60.0 / self.rate_limit
+        self._last_request_time = 0.0
+
+    async def _enforce_rate_limit(self):
+        """Wait if necessary to respect the per-minute rate limit."""
+        import time
+        now = time.monotonic()
+        elapsed = now - self._last_request_time
+        if elapsed < self._rate_interval:
+            await asyncio.sleep(self._rate_interval - elapsed)
+        self._last_request_time = time.monotonic()
+
+    def _parse_ip_response(self, data: Dict[str, Any]) -> ToolResult:
+        """Parse a VT IP response (real or mock) into a ToolResult."""
+        reputation_score = 0.0
+        indicators = []
+
+        if data.get('response_code') == 1:
+            detected_urls = data.get('detected_urls', [])
+            detected_samples = (
+                data.get('detected_communicating_samples', [])
+                or data.get('detected_samples', [])
+            )
+            reputation_score = min(len(detected_urls) * 0.1 + len(detected_samples) * 0.2, 1.0)
+
+            if detected_urls:
+                indicators.append(f"Associated with {len(detected_urls)} malicious URLs")
+            if detected_samples:
+                indicators.append(f"Associated with {len(detected_samples)} malicious files")
+            if data.get('as_owner'):
+                indicators.append(f"ASN: {data['as_owner']}")
+            if data.get('country'):
+                indicators.append(f"Country: {data['country']}")
+
+        return ToolResult(
+            success=True, source="virustotal",
+            data={'reputation_score': reputation_score, 'indicators': indicators, 'raw_response': data}
+        )
 
     async def query_ip(self, ip: str) -> ToolResult:
         """Query IP reputation from VirusTotal"""
         try:
-            # Validate IP address
             ipaddress.ip_address(ip)
 
+            if self.use_mocks:
+                data = get_mock_response("virustotal", "ip", ip)
+                self.logger.info(f"[MOCK] VirusTotal IP query for {ip}")
+                return self._parse_ip_response(data)
+
+            await self._enforce_rate_limit()
             url = f"{self.base_url}/ip-address/report"
             params = {
                 'apikey': self.api_key,
@@ -86,38 +135,11 @@ class VirusTotalTool(BaseTool):
             async with self._session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-
-                    # Parse VirusTotal response
-                    reputation_score = 0.0
-                    indicators = []
-
-                    if data.get('response_code') == 1:
-                        # Extract reputation indicators
-                        detected_urls = data.get('detected_urls', [])
-                        detected_samples = data.get('detected_samples', [])
-
-                        reputation_score = min(len(detected_urls) * 0.1 + len(detected_samples) * 0.2, 1.0)
-
-                        if detected_urls:
-                            indicators.append(f"Associated with {len(detected_urls)} malicious URLs")
-                        if detected_samples:
-                            indicators.append(f"Associated with {len(detected_samples)} malicious files")
-
-                    return ToolResult(
-                        success=True,
-                        source="virustotal",
-                        data={
-                            'reputation_score': reputation_score,
-                            'indicators': indicators,
-                            'raw_response': data
-                        }
-                    )
+                    return self._parse_ip_response(data)
                 else:
                     return ToolResult(
-                        success=False,
-                        source="virustotal",
-                        data={},
-                        error=f"HTTP {response.status}"
+                        success=False, source="virustotal",
+                        data={}, error=f"HTTP {response.status}"
                     )
 
         except Exception as e:
@@ -134,7 +156,21 @@ class VirusTotalTool(BaseTool):
             if not validators.url(url):
                 raise ValueError("Invalid URL format")
 
-            # First, submit URL for scanning
+            if self.use_mocks:
+                data = get_mock_response("virustotal", "url", url)
+                self.logger.info(f"[MOCK] VirusTotal URL query for {url}")
+                positives = data.get('positives', 0)
+                total = data.get('total', 1)
+                rep = positives / total if total > 0 else 0.0
+                indicators = []
+                if positives > 0:
+                    indicators.append(f"Detected as malicious by {positives}/{total} engines")
+                return ToolResult(
+                    success=True, source="virustotal",
+                    data={'reputation_score': rep, 'indicators': indicators, 'raw_response': data}
+                )
+
+            await self._enforce_rate_limit()
             scan_url = f"{self.base_url}/url/scan"
             scan_params = {
                 'apikey': self.api_key,
@@ -194,6 +230,23 @@ class VirusTotalTool(BaseTool):
     async def query_file_hash(self, file_hash: str) -> ToolResult:
         """Query file hash reputation from VirusTotal"""
         try:
+            if self.use_mocks:
+                data = get_mock_response("virustotal", "file", file_hash)
+                self.logger.info(f"[MOCK] VirusTotal file query for {file_hash}")
+                positives = data.get('positives', 0)
+                total = data.get('total', 1)
+                rep = positives / total if total > 0 else 0.0
+                indicators = []
+                if positives > 0:
+                    indicators.append(f"Detected as malware by {positives}/{total} engines")
+                if data.get('scan_date'):
+                    indicators.append(f"Last scanned: {data['scan_date']}")
+                return ToolResult(
+                    success=True, source="virustotal",
+                    data={'reputation_score': rep, 'indicators': indicators, 'raw_response': data}
+                )
+
+            await self._enforce_rate_limit()
             url = f"{self.base_url}/file/report"
             params = {
                 'apikey': self.api_key,
@@ -242,14 +295,47 @@ class VirusTotalTool(BaseTool):
 class AbuseIPDBTool(BaseTool):
     """AbuseIPDB API integration for IP reputation checking"""
 
+    TOOL_NAME = "abuseipdb"
+
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         super().__init__(api_key, config)
         self.base_url = "https://api.abuseipdb.com/api/v2"
+
+    def _parse_ip_response(self, data: Dict[str, Any]) -> ToolResult:
+        ip_data = data.get('data', {})
+        abuse_confidence = ip_data.get('abuseConfidencePercentage', 0)
+        usage_type = ip_data.get('usageType', 'unknown')
+        country = ip_data.get('countryCode', 'unknown')
+        isp = ip_data.get('isp', 'unknown')
+        total_reports = ip_data.get('totalReports', 0)
+
+        reputation_score = abuse_confidence / 100.0
+        indicators = []
+        if abuse_confidence > 0:
+            indicators.append(f"Abuse confidence: {abuse_confidence}%")
+        if total_reports > 0:
+            indicators.append(f"Total reports: {total_reports}")
+        if usage_type != 'unknown':
+            indicators.append(f"Usage type: {usage_type}")
+        if isp != 'unknown':
+            indicators.append(f"ISP: {isp}")
+        if country != 'unknown':
+            indicators.append(f"Country: {country}")
+
+        return ToolResult(
+            success=True, source="abuseipdb",
+            data={'reputation_score': reputation_score, 'indicators': indicators, 'raw_response': data}
+        )
 
     async def query_ip(self, ip: str) -> ToolResult:
         """Query IP reputation from AbuseIPDB"""
         try:
             ipaddress.ip_address(ip)
+
+            if self.use_mocks:
+                data = get_mock_response("abuseipdb", "ip", ip)
+                self.logger.info(f"[MOCK] AbuseIPDB query for {ip}")
+                return self._parse_ip_response(data)
 
             url = f"{self.base_url}/check"
             headers = {
@@ -265,31 +351,7 @@ class AbuseIPDBTool(BaseTool):
             async with self._session.get(url, headers=headers, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    ip_data = data.get('data', {})
-
-                    abuse_confidence = ip_data.get('abuseConfidencePercentage', 0)
-                    usage_type = ip_data.get('usageType', 'unknown')
-                    country = ip_data.get('countryCode', 'unknown')
-
-                    reputation_score = abuse_confidence / 100.0
-                    indicators = []
-
-                    if abuse_confidence > 0:
-                        indicators.append(f"Abuse confidence: {abuse_confidence}%")
-                    if usage_type != 'unknown':
-                        indicators.append(f"Usage type: {usage_type}")
-                    if country != 'unknown':
-                        indicators.append(f"Country: {country}")
-
-                    return ToolResult(
-                        success=True,
-                        source="abuseipdb",
-                        data={
-                            'reputation_score': reputation_score,
-                            'indicators': indicators,
-                            'raw_response': data
-                        }
-                    )
+                    return self._parse_ip_response(data)
 
         except Exception as e:
             return ToolResult(
@@ -340,18 +402,39 @@ class URLVoidTool(BaseTool):
             if not validators.url(url):
                 raise ValueError("Invalid URL format")
 
-            # Extract domain from URL
             from urllib.parse import urlparse
+            import xml.etree.ElementTree as ET
+
             domain = urlparse(url).netloc
 
             api_url = f"{self.base_url}/{self.api_key}/host/{domain}"
 
             async with self._session.get(api_url) as response:
                 if response.status == 200:
-                    # URLVoid returns XML, would need XML parsing
-                    # For demo purposes, return basic structure
+                    body = await response.text()
+                    indicators = []
                     reputation_score = 0.0
-                    indicators = ["URLVoid check completed"]
+
+                    try:
+                        root = ET.fromstring(body)
+                        detections = root.findtext('.//detections')
+                        engines_count = root.findtext('.//engines/count')
+                        ip = root.findtext('.//ip')
+                        country = root.findtext('.//country_name')
+
+                        if detections and engines_count:
+                            det = int(detections)
+                            eng = int(engines_count)
+                            reputation_score = det / eng if eng > 0 else 0.0
+                            if det > 0:
+                                indicators.append(f"Detected by {det}/{eng} engines")
+
+                        if ip:
+                            indicators.append(f"Resolves to {ip}")
+                        if country:
+                            indicators.append(f"Hosted in {country}")
+                    except ET.ParseError:
+                        indicators.append("URLVoid check completed (non-XML response)")
 
                     return ToolResult(
                         success=True,
@@ -359,8 +442,15 @@ class URLVoidTool(BaseTool):
                         data={
                             'reputation_score': reputation_score,
                             'indicators': indicators,
-                            'raw_response': {'status': 'checked'}
+                            'raw_response': {'status': 'checked', 'body_length': len(body)}
                         }
+                    )
+                else:
+                    return ToolResult(
+                        success=False,
+                        source="urlvoid",
+                        data={},
+                        error=f"HTTP {response.status}"
                     )
 
         except Exception as e:
@@ -384,14 +474,49 @@ class URLVoidTool(BaseTool):
 class ShodanTool(BaseTool):
     """Shodan API integration for internet device scanning"""
 
+    TOOL_NAME = "shodan"
+
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         super().__init__(api_key, config)
         self.base_url = "https://api.shodan.io"
+
+    def _parse_ip_response(self, data: Dict[str, Any]) -> ToolResult:
+        ports = data.get('ports', [])
+        vulns = data.get('vulns', [])
+        org = data.get('org', 'unknown')
+
+        reputation_score = 0.0
+        if len(ports) > 10:
+            reputation_score += 0.3
+        if vulns:
+            reputation_score += min(len(vulns) * 0.15, 0.6)
+
+        indicators = []
+        if ports:
+            indicators.append(f"Open ports: {len(ports)} ({', '.join(str(p) for p in ports[:8])})")
+        if vulns:
+            indicators.append(f"Known vulnerabilities: {', '.join(vulns[:5])}")
+        if org != 'unknown':
+            indicators.append(f"Organization: {org}")
+        if data.get('os'):
+            indicators.append(f"OS: {data['os']}")
+        if data.get('city'):
+            indicators.append(f"Location: {data['city']}, {data.get('country_code', '')}")
+
+        return ToolResult(
+            success=True, source="shodan",
+            data={'reputation_score': min(reputation_score, 1.0), 'indicators': indicators, 'raw_response': data}
+        )
 
     async def query_ip(self, ip: str) -> ToolResult:
         """Query IP information from Shodan"""
         try:
             ipaddress.ip_address(ip)
+
+            if self.use_mocks:
+                data = get_mock_response("shodan", "ip", ip)
+                self.logger.info(f"[MOCK] Shodan query for {ip}")
+                return self._parse_ip_response(data)
 
             url = f"{self.base_url}/shodan/host/{ip}"
             params = {'key': self.api_key}
@@ -399,35 +524,7 @@ class ShodanTool(BaseTool):
             async with self._session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-
-                    ports = data.get('ports', [])
-                    vulns = data.get('vulns', [])
-                    org = data.get('org', 'unknown')
-
-                    # Calculate reputation based on open ports and vulnerabilities
-                    reputation_score = 0.0
-                    if len(ports) > 10:  # Many open ports = higher risk
-                        reputation_score += 0.3
-                    if vulns:  # Known vulnerabilities = high risk
-                        reputation_score += 0.6
-
-                    indicators = []
-                    if ports:
-                        indicators.append(f"Open ports: {len(ports)}")
-                    if vulns:
-                        indicators.append(f"Known vulnerabilities: {len(vulns)}")
-                    if org != 'unknown':
-                        indicators.append(f"Organization: {org}")
-
-                    return ToolResult(
-                        success=True,
-                        source="shodan",
-                        data={
-                            'reputation_score': min(reputation_score, 1.0),
-                            'indicators': indicators,
-                            'raw_response': data
-                        }
-                    )
+                    return self._parse_ip_response(data)
 
         except Exception as e:
             return ToolResult(
@@ -467,26 +564,27 @@ class ToolRegistry:
     def __init__(self, api_keys: Dict[str, str], config: Dict[str, Any] = None):
         self.api_keys = api_keys
         self.config = config or {}
+        self.use_mocks = self.config.get('use_mocks', False)
         self.logger = logging.getLogger(__name__)
 
-        # Initialize available tools
         self.tools = {}
         self._initialize_tools()
 
     def _initialize_tools(self):
-        """Initialize all available tools based on API key configuration"""
+        """Initialize all available tools. Tools without API keys use mock data."""
 
-        if self.api_keys.get('virustotal'):
-            self.tools['virustotal'] = VirusTotalTool(
-                self.api_keys['virustotal'],
-                self.config.get('virustotal', {})
-            )
+        tool_classes = {
+            'virustotal': VirusTotalTool,
+            'abuseipdb': AbuseIPDBTool,
+            'shodan': ShodanTool,
+        }
 
-        if self.api_keys.get('abuseipdb'):
-            self.tools['abuseipdb'] = AbuseIPDBTool(
-                self.api_keys['abuseipdb'],
-                self.config.get('abuseipdb', {})
-            )
+        for name, cls in tool_classes.items():
+            key = self.api_keys.get(name, '')
+            tool_config = self.config.get(name, {})
+            if self.use_mocks:
+                tool_config['use_mocks'] = True
+            self.tools[name] = cls(key or '', tool_config)
 
         if self.api_keys.get('urlvoid'):
             self.tools['urlvoid'] = URLVoidTool(
@@ -494,20 +592,31 @@ class ToolRegistry:
                 self.config.get('urlvoid', {})
             )
 
-        if self.api_keys.get('shodan'):
-            self.tools['shodan'] = ShodanTool(
-                self.api_keys['shodan'],
-                self.config.get('shodan', {})
-            )
+        live = [n for n, t in self.tools.items() if not t.use_mocks]
+        mock = [n for n, t in self.tools.items() if t.use_mocks]
+        self.logger.info(
+            f"Initialized {len(self.tools)} tools: "
+            f"live={live or 'none'}, mock={mock or 'none'}"
+        )
 
-        self.logger.info(f"Initialized {len(self.tools)} security tools: {list(self.tools.keys())}")
+    async def _query_with_sessions(self, available_sources: List[str],
+                                   method_name: str, *args) -> List[Union[ToolResult, Exception]]:
+        """Open sessions for all tools, run queries concurrently, then close."""
+        tools = [self.tools[s] for s in available_sources]
+        for tool in tools:
+            await tool.__aenter__()
+        try:
+            tasks = [getattr(tool, method_name)(*args) for tool in tools]
+            return await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            for tool in tools:
+                await tool.__aexit__(None, None, None)
 
     async def query_ip_reputation(self, ip: str, sources: Optional[List[str]] = None) -> ToolResult:
         """Query IP reputation from all available sources"""
         if sources is None:
             sources = ['virustotal', 'abuseipdb', 'shodan']
 
-        # Filter to available tools
         available_sources = [s for s in sources if s in self.tools]
 
         if not available_sources:
@@ -518,15 +627,7 @@ class ToolRegistry:
                 error="No tools available for IP reputation checking"
             )
 
-        tasks = []
-        for source in available_sources:
-            tool = self.tools[source]
-            async with tool:
-                tasks.append(tool.query_ip(ip))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Aggregate results
+        results = await self._query_with_sessions(available_sources, 'query_ip', ip)
         return self._aggregate_results(results, "ip_reputation")
 
     async def query_url_reputation(self, url: str, sources: Optional[List[str]] = None) -> ToolResult:
@@ -544,14 +645,7 @@ class ToolRegistry:
                 error="No tools available for URL reputation checking"
             )
 
-        tasks = []
-        for source in available_sources:
-            tool = self.tools[source]
-            async with tool:
-                tasks.append(tool.query_url(url))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
+        results = await self._query_with_sessions(available_sources, 'query_url', url)
         return self._aggregate_results(results, "url_reputation")
 
     async def query_file_reputation(self, file_hash: str, sources: Optional[List[str]] = None) -> ToolResult:
@@ -569,14 +663,7 @@ class ToolRegistry:
                 error="No tools available for file reputation checking"
             )
 
-        tasks = []
-        for source in available_sources:
-            tool = self.tools[source]
-            async with tool:
-                tasks.append(tool.query_file_hash(file_hash))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
+        results = await self._query_with_sessions(available_sources, 'query_file_hash', file_hash)
         return self._aggregate_results(results, "file_reputation")
 
     def _aggregate_results(self, results: List[Union[ToolResult, Exception]],

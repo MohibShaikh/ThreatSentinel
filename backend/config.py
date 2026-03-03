@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     urlvoid_api_key: Optional[str] = Field(default=None, env="URLVOID_API_KEY")
     shodan_api_key: Optional[str] = Field(default=None, env="SHODAN_API_KEY")
 
+    # LLM Configuration
+    llm_provider: str = Field(default="glm", env="LLM_PROVIDER")
+    llm_api_key: Optional[str] = Field(default=None, env="LLM_API_KEY")
+    llm_model: Optional[str] = Field(default=None, env="LLM_MODEL")
+    llm_temperature: float = Field(default=0.3, env="LLM_TEMPERATURE")
+    llm_max_tokens: int = Field(default=2048, env="LLM_MAX_TOKENS")
+
     # Agent Configuration
     confidence_threshold: float = Field(default=0.7, env="CONFIDENCE_THRESHOLD")
     emergency_threshold: float = Field(default=0.8, env="EMERGENCY_THRESHOLD")

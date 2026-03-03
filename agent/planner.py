@@ -15,6 +15,9 @@ from enum import Enum
 from .tools import ToolRegistry
 from .memory import AgentMemory
 from .reporter import IncidentReporter
+from .integrations.registry import IntegrationRegistry
+from .integrations.base import ActionType as IntegrationActionType
+from .llm import create_llm_provider, build_analysis_prompt, BaseLLMProvider
 
 
 class InvestigationPhase(Enum):
@@ -36,6 +39,7 @@ class InvestigationContext:
     intelligence_data: Dict[str, Any]
     risk_assessment: Optional[Dict[str, Any]] = None
     recommended_actions: List[Dict[str, Any]] = None
+    actions_executed: List[Dict[str, Any]] = None
     reasoning_log: List[str] = None
     start_time: datetime = None
 
@@ -70,6 +74,22 @@ class SOCAgentPlanner:
         self.tools = ToolRegistry(config.get('api_keys', {}))
         self.memory = AgentMemory(config.get('memory', {}))
         self.reporter = IncidentReporter(config.get('reporting', {}))
+        self.integrations = IntegrationRegistry(config.get('integrations_config', {}))
+
+        # LLM provider for intelligent analysis (optional)
+        self.llm: Optional[BaseLLMProvider] = None
+        llm_config = config.get('llm', {})
+        if llm_config.get('api_key'):
+            try:
+                self.llm = create_llm_provider(
+                    provider=llm_config.get('provider', 'glm'),
+                    api_key=llm_config['api_key'],
+                    model=llm_config.get('model'),
+                    config=llm_config,
+                )
+                self.logger.info(f"LLM enabled: {self.llm.provider_name}/{self.llm.model}")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize LLM: {e}")
 
         # Planning parameters
         self.confidence_threshold = config.get('confidence_threshold', 0.7)
@@ -88,13 +108,13 @@ class SOCAgentPlanner:
         default_rules = [
             {
                 "name": "high_risk_threshold",
-                "condition": lambda risk, confidence: risk >= 0.8,
+                "condition": lambda risk, confidence, context: risk >= 0.8,
                 "reason": "Risk score exceeds high threshold",
                 "priority": "high"
             },
             {
                 "name": "low_confidence",
-                "condition": lambda risk, confidence: confidence < 0.5,
+                "condition": lambda risk, confidence, context: confidence < 0.5,
                 "reason": "Analysis confidence below threshold",
                 "priority": "medium"
             },
@@ -187,6 +207,9 @@ class SOCAgentPlanner:
             # Phase 2: Intelligence Gathering
             await self._intelligence_gathering(context, emergency_mode)
 
+            # Phase 2.5: LLM-Powered Analysis (if configured)
+            await self._llm_analysis(context)
+
             # Phase 3: Risk Analysis
             await self._risk_analysis(context, emergency_mode)
 
@@ -215,6 +238,9 @@ class SOCAgentPlanner:
 
             # Phase 4: Action Planning
             await self._action_planning(context, emergency_mode)
+
+            # Phase 4.5: Execute Actions via Integrations
+            await self._execute_actions(context)
 
             # Phase 5: Generate Report
             await self._generate_report(context)
@@ -339,6 +365,57 @@ class SOCAgentPlanner:
 
         self.logger.info(f"Intelligence gathering complete for {context.event_id}")
 
+    async def _llm_analysis(self, context: InvestigationContext):
+        """Phase 2.5: Use LLM for intelligent threat analysis"""
+        if self.llm is None:
+            return
+
+        context.reasoning_log.append("=== LLM ANALYSIS ===")
+        context.reasoning_log.append(f"Provider: {self.llm.provider_name}/{self.llm.model}")
+
+        messages = build_analysis_prompt(context.event_data, context.intelligence_data)
+
+        try:
+            response = await self.llm.chat(messages)
+
+            if not response.success:
+                context.reasoning_log.append(f"LLM analysis failed: {response.error}")
+                context.llm_analysis = None
+                return
+
+            import json
+            content = response.content.strip()
+            if content.startswith("```"):
+                content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+            try:
+                analysis = json.loads(content)
+            except json.JSONDecodeError:
+                context.reasoning_log.append("LLM returned non-JSON response, using raw text")
+                analysis = {"threat_assessment": content, "risk_modifier": 0.0, "confidence": 0.3}
+
+            context.llm_analysis = analysis
+
+            context.reasoning_log.append(f"Threat: {analysis.get('threat_assessment', 'N/A')[:120]}")
+            context.reasoning_log.append(f"LLM risk modifier: {analysis.get('risk_modifier', 0)}")
+            context.reasoning_log.append(f"LLM confidence: {analysis.get('confidence', 0)}")
+            context.reasoning_log.append(f"Classification: {analysis.get('attack_classification', 'unknown')}")
+            context.reasoning_log.append(f"Urgency: {analysis.get('urgency', 'unknown')}")
+            context.reasoning_log.append(
+                f"Tokens used: {response.usage.get('total_tokens', 0)}"
+            )
+
+            self.logger.info(
+                f"LLM analysis complete for {context.event_id}: "
+                f"{analysis.get('attack_classification', 'unknown')} "
+                f"({response.usage.get('total_tokens', 0)} tokens)"
+            )
+
+        except Exception as e:
+            context.reasoning_log.append(f"LLM analysis error: {e}")
+            context.llm_analysis = None
+            self.logger.warning(f"LLM analysis failed: {e}")
+
     async def _risk_analysis(self, context: InvestigationContext, emergency_mode: bool):
         """Phase 3: Analyze risk based on event data and intelligence"""
         context.phase = InvestigationPhase.RISK_ANALYSIS
@@ -356,8 +433,18 @@ class SOCAgentPlanner:
         pattern_risk = await self._calculate_pattern_risk(context)
         context.reasoning_log.append(f"Pattern analysis risk: {pattern_risk:.2f}")
 
-        # Calculate final risk score
-        final_risk = (base_risk * 0.3) + (intel_risk * 0.5) + (pattern_risk * 0.2)
+        # Incorporate LLM risk modifier if available
+        llm_risk = 0.0
+        llm_analysis = getattr(context, 'llm_analysis', None)
+        if llm_analysis and isinstance(llm_analysis, dict):
+            llm_risk = float(llm_analysis.get('risk_modifier', 0.0))
+            context.reasoning_log.append(f"LLM risk modifier applied: {llm_risk:.2f}")
+
+        if llm_analysis:
+            final_risk = (base_risk * 0.2) + (intel_risk * 0.35) + (pattern_risk * 0.15) + (llm_risk * 0.3)
+        else:
+            final_risk = (base_risk * 0.3) + (intel_risk * 0.5) + (pattern_risk * 0.2)
+
         risk_level = self._determine_risk_level(final_risk)
 
         context.risk_assessment = {
@@ -366,6 +453,8 @@ class SOCAgentPlanner:
             'base_risk': base_risk,
             'intel_risk': intel_risk,
             'pattern_risk': pattern_risk,
+            'llm_risk': llm_risk,
+            'llm_analysis': llm_analysis,
             'confidence': self._calculate_confidence(context)
         }
 
@@ -394,6 +483,71 @@ class SOCAgentPlanner:
             context.reasoning_log.append(f"Priority {i+1}: {action['action_type']} - {action['description']}")
 
         self.logger.info(f"Action planning complete for {context.event_id}")
+
+    async def _execute_actions(self, context: InvestigationContext):
+        """Phase 4.5: Execute recommended actions through the integration layer"""
+        if not context.recommended_actions:
+            return
+
+        if not self.integrations.active_integrations:
+            context.reasoning_log.append("No active integrations configured — actions are recommendations only")
+            context.actions_executed = []
+            return
+
+        context.reasoning_log.append("=== ACTION EXECUTION ===")
+        executed = []
+
+        action_type_map = {
+            'BLOCK': IntegrationActionType.BLOCK_IP,
+            'ESCALATE': IntegrationActionType.ESCALATE,
+            'ALERT': IntegrationActionType.SEND_ALERT,
+            'MONITOR': IntegrationActionType.ADD_TO_WATCHLIST,
+            'INVESTIGATE': IntegrationActionType.CREATE_INCIDENT,
+        }
+
+        source_ip = context.event_data.get('source_ip', '')
+
+        for action in context.recommended_actions:
+            action_key = action.get('action_type', '')
+            integration_action = action_type_map.get(action_key)
+            if not integration_action:
+                continue
+
+            target = source_ip or context.event_id
+            action_context = {
+                'event_id': context.event_id,
+                'risk_level': context.risk_assessment.get('risk_level', 'unknown'),
+                'description': action.get('description', ''),
+            }
+
+            try:
+                response = await self.integrations.execute_action(
+                    action_type=integration_action,
+                    target=target,
+                    context=action_context
+                )
+                executed.append({
+                    'action': action_key,
+                    'integration_action': integration_action.value,
+                    'target': target,
+                    'success': response.success,
+                    'integrations_used': response.metadata.get('integration_names', []),
+                })
+                status_str = "SUCCESS" if response.success else "FAILED"
+                context.reasoning_log.append(
+                    f"Action {action_key} -> {integration_action.value} on {target}: {status_str}"
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to execute {action_key}: {e}")
+                executed.append({
+                    'action': action_key,
+                    'target': target,
+                    'success': False,
+                    'error': str(e),
+                })
+                context.reasoning_log.append(f"Action {action_key} FAILED: {e}")
+
+        context.actions_executed = executed
 
     async def _generate_report(self, context: InvestigationContext):
         """Phase 5: Generate comprehensive incident report"""
@@ -518,15 +672,18 @@ class SOCAgentPlanner:
 
     def _calculate_confidence(self, context: InvestigationContext) -> float:
         """Calculate confidence in the risk assessment"""
-        confidence = 0.5  # Base confidence
+        confidence = 0.5
 
-        # Increase confidence with more intelligence sources
         intel_sources = len(context.intelligence_data.get('sources', []))
         confidence += min(intel_sources * 0.1, 0.3)
 
-        # Increase confidence with historical data
         if context.intelligence_data.get('confidence', 0) > 0:
-            confidence += 0.2
+            confidence += 0.1
+
+        llm_analysis = getattr(context, 'llm_analysis', None)
+        if llm_analysis and isinstance(llm_analysis, dict):
+            llm_conf = float(llm_analysis.get('confidence', 0))
+            confidence += llm_conf * 0.2
 
         return min(confidence, 1.0)
 

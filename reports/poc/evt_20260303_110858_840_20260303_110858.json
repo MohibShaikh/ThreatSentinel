@@ -1,0 +1,236 @@
+{
+  "metadata": {
+    "event_id": "evt_20260303_110858_840",
+    "report_version": "2.0",
+    "generated_at": "2026-03-03T11:08:58.313735",
+    "investigation_duration_minutes": 0.0,
+    "agent_version": "2.0.0",
+    "classification": "INTERNAL",
+    "status": "COMPLETED"
+  },
+  "executive_summary": "This investigation analyzed a phishing_attempt security event involving source IP 203.0.113.45.\nAfter gathering intelligence from 2 external sources and performing risk analysis,\nthe event has been classified as **HIGH** risk (score: 0.71/1.0).\n\nThe investigation determined that this event poses significant security risk and requires immediate attention.\n\n\u26a0\ufe0f  **High-confidence threat intelligence indicates malicious activity.**\n\n\ud83d\udccb **2 prioritized response actions have been recommended.**",
+  "event_analysis": {
+    "event_type": "phishing_attempt",
+    "source_ip": "203.0.113.45",
+    "detection_time": "2026-03-03T11:08:58.298225",
+    "user_agent": null,
+    "payload_summary": "Structured data with 3 fields",
+    "event_characteristics": [
+      "Source IP: 203.0.113.45",
+      "Payload data included"
+    ]
+  },
+  "threat_intelligence": {
+    "sources_consulted": [
+      "registry",
+      "registry"
+    ],
+    "overall_reputation_score": 1.0,
+    "confidence": 1.0,
+    "threat_indicators": [
+      "[virustotal] Associated with 2 malicious URLs",
+      "[virustotal] Associated with 9 malicious files",
+      "[virustotal] ASN: HETZNER-AS",
+      "[virustotal] Country: UA",
+      "[abuseipdb] Abuse confidence: 94%",
+      "[abuseipdb] Total reports: 104",
+      "[abuseipdb] Usage type: Data Center/Web Hosting/Transit",
+      "[abuseipdb] ISP: Microsoft Corporation",
+      "[abuseipdb] Country: NL",
+      "[shodan] Open ports: 6 (21, 445, 995, 3306, 8888, 9200)",
+      "[shodan] Known vulnerabilities: CVE-2021-26855, CVE-2023-4966, CVE-2023-23397, CVE-2019-0708, CVE-2023-44487",
+      "[shodan] Organization: Cloudflare Inc.",
+      "[shodan] Location: Amsterdam, US",
+      "[virustotal] Detected as malicious by 35/72 engines"
+    ],
+    "source_details": []
+  },
+  "risk_assessment": {
+    "overall_score": 0.71,
+    "risk_level": "high",
+    "confidence": 0.7999999999999999,
+    "component_scores": {
+      "base_risk": 0.7,
+      "intelligence_risk": 1.0,
+      "pattern_risk": 0.0
+    },
+    "risk_factors": [
+      "External threat intelligence indicates malicious activity"
+    ],
+    "mitigating_factors": []
+  },
+  "recommended_actions": [
+    {
+      "action_type": "INVESTIGATE",
+      "priority": 2,
+      "description": "Conduct detailed investigation",
+      "estimated_effort": "30 minutes",
+      "technical_details": "",
+      "urgency": "HIGH"
+    },
+    {
+      "action_type": "MONITOR",
+      "priority": 3,
+      "description": "Enhanced monitoring for 24 hours",
+      "estimated_effort": "10 minutes setup",
+      "technical_details": "",
+      "urgency": "MEDIUM"
+    }
+  ],
+  "investigation_timeline": [
+    "=== INITIAL ASSESSMENT ===",
+    "Event type: phishing_attempt, Base severity: 0.7",
+    "=== INTELLIGENCE GATHERING ===",
+    "Querying IP reputation for: 203.0.113.45",
+    "Querying URL reputation for: http://g00gle-security-alert.com/verify",
+    "Gathered intelligence from 2 sources",
+    "=== RISK ANALYSIS ===",
+    "Base risk score: 0.70",
+    "Intelligence risk modifier: 1.00",
+    "Pattern analysis risk: 0.00",
+    "Final risk assessment: HIGH (0.71)",
+    "=== ACTION PLANNING ===",
+    "Generated 2 prioritized actions",
+    "Priority 1: INVESTIGATE - Conduct detailed investigation",
+    "Priority 2: MONITOR - Enhanced monitoring for 24 hours",
+    "No active integrations configured \u2014 actions are recommendations only"
+  ],
+  "technical_details": {
+    "investigation_phases": [],
+    "tools_used": [],
+    "pattern_insights": [],
+    "network_analysis": {
+      "source_ip_analysis": {
+        "ip": "203.0.113.45",
+        "reputation_score": 1.0,
+        "is_internal": false
+      },
+      "geographic_indicators": {},
+      "network_behavior": []
+    },
+    "behavioral_analysis": {
+      "user_agent_analysis": {},
+      "timing_analysis": {},
+      "payload_analysis": {}
+    }
+  },
+  "indicators": [
+    {
+      "type": "ip",
+      "value": "203.0.113.45",
+      "confidence": 1.0,
+      "source": "investigation",
+      "description": "Source IP with reputation score 1.00"
+    },
+    {
+      "type": "url",
+      "value": "http://g00gle-security-alert.com/verify",
+      "confidence": 0.5,
+      "source": "investigation",
+      "description": "Suspicious URL from event data"
+    },
+    {
+      "type": "intelligence",
+      "value": "[virustotal] Associated with 2 malicious URLs",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[virustotal] Associated with 9 malicious files",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[virustotal] ASN: HETZNER-AS",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[virustotal] Country: UA",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[abuseipdb] Abuse confidence: 94%",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[abuseipdb] Total reports: 104",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[abuseipdb] Usage type: Data Center/Web Hosting/Transit",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[abuseipdb] ISP: Microsoft Corporation",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[abuseipdb] Country: NL",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[shodan] Open ports: 6 (21, 445, 995, 3306, 8888, 9200)",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[shodan] Known vulnerabilities: CVE-2021-26855, CVE-2023-4966, CVE-2023-23397, CVE-2019-0708, CVE-2023-44487",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[shodan] Organization: Cloudflare Inc.",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[shodan] Location: Amsterdam, US",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    },
+    {
+      "type": "intelligence",
+      "value": "[virustotal] Detected as malicious by 35/72 engines",
+      "confidence": 0.7,
+      "source": "threat_intelligence",
+      "description": "Threat intelligence indicator"
+    }
+  ],
+  "raw_data": {},
+  "formats": {
+    "markdown": "\n# Security Incident Investigation Report\n\n**Event ID:** evt_20260303_110858_840\n**Investigation Date:** 2026-03-03 11:08:58 UTC\n**Duration:** 0.0 minutes\n**Risk Level:** HIGH\n\n## Executive Summary\n\nThis investigation analyzed a phishing_attempt security event involving source IP 203.0.113.45.\nAfter gathering intelligence from 2 external sources and performing risk analysis,\nthe event has been classified as **HIGH** risk (score: 0.71/1.0).\n\nThe investigation determined that this event poses significant security risk and requires immediate attention.\n\n\u26a0\ufe0f  **High-confidence threat intelligence indicates malicious activity.**\n\n\ud83d\udccb **2 prioritized response actions have been recommended.**\n\n## Event Details\n\n**Event Type:** phishing_attempt\n**Source IP:** 203.0.113.45\n**Detection Time:** N/A\n\n**Url:** http://g00gle-security-alert.com/verify\n**Payload:** {'sender': 'security@g00gle-alert.com', 'subject': 'Urgent: Account Verification Required', 'targets': 23}\n\n## Threat Intelligence Analysis\n\nConsulted 2 threat intelligence sources with maximum reputation score of 1.00 and overall confidence of 100.0%.\n\n### Intelligence Sources\n\n\n## Risk Assessment\n\n**Overall Risk Score:** 0.71/1.0 (HIGH)\n\n| Component | Score | Weight | Contribution |\n|-----------|-------|--------|--------------|\n| Base Risk | 0.7 | 30% | 0.21 |\n| Intelligence Risk | 1.0 | 50% | 0.5 |\n| Pattern Risk | 0.0 | 20% | 0.0 |\n\n**Confidence Level:** 80.0%\n\nThe event demonstrates significant threat indicators and requires immediate attention and response. External threat intelligence confirms malicious activity.\n\n## Recommended Actions\n\n### 1. INVESTIGATE (Priority 2)\n\n**Description:** Conduct detailed investigation\n**Estimated Effort:** 30 minutes\n\n\n### 2. MONITOR (Priority 3)\n\n**Description:** Enhanced monitoring for 24 hours\n**Estimated Effort:** 10 minutes setup\n\n\n\n\n## Investigation Timeline\n\n- === INITIAL ASSESSMENT ===\n- Event type: phishing_attempt, Base severity: 0.7\n- === INTELLIGENCE GATHERING ===\n- Querying IP reputation for: 203.0.113.45\n- Querying URL reputation for: http://g00gle-security-alert.com/verify\n- Gathered intelligence from 2 sources\n- === RISK ANALYSIS ===\n- Base risk score: 0.70\n- Intelligence risk modifier: 1.00\n- Pattern analysis risk: 0.00\n- Final risk assessment: HIGH (0.71)\n- === ACTION PLANNING ===\n- Generated 2 prioritized actions\n- Priority 1: INVESTIGATE - Conduct detailed investigation\n- Priority 2: MONITOR - Enhanced monitoring for 24 hours\n- No active integrations configured \u2014 actions are recommendations only\n\n\n## Technical Details\n\n\n\n### Indicators of Compromise (IoCs)\n\n- **ip**: `203.0.113.45` (Source: investigation)\n- **url**: `http://g00gle-security-alert.com/verify` (Source: investigation)\n- **intelligence**: `[virustotal] Associated with 2 malicious URLs` (Source: threat_intelligence)\n- **intelligence**: `[virustotal] Associated with 9 malicious files` (Source: threat_intelligence)\n- **intelligence**: `[virustotal] ASN: HETZNER-AS` (Source: threat_intelligence)\n- **intelligence**: `[virustotal] Country: UA` (Source: threat_intelligence)\n- **intelligence**: `[abuseipdb] Abuse confidence: 94%` (Source: threat_intelligence)\n- **intelligence**: `[abuseipdb] Total reports: 104` (Source: threat_intelligence)\n- **intelligence**: `[abuseipdb] Usage type: Data Center/Web Hosting/Transit` (Source: threat_intelligence)\n- **intelligence**: `[abuseipdb] ISP: Microsoft Corporation` (Source: threat_intelligence)\n- **intelligence**: `[abuseipdb] Country: NL` (Source: threat_intelligence)\n- **intelligence**: `[shodan] Open ports: 6 (21, 445, 995, 3306, 8888, 9200)` (Source: threat_intelligence)\n- **intelligence**: `[shodan] Known vulnerabilities: CVE-2021-26855, CVE-2023-4966, CVE-2023-23397, CVE-2019-0708, CVE-2023-44487` (Source: threat_intelligence)\n- **intelligence**: `[shodan] Organization: Cloudflare Inc.` (Source: threat_intelligence)\n- **intelligence**: `[shodan] Location: Amsterdam, US` (Source: threat_intelligence)\n- **intelligence**: `[virustotal] Detected as malicious by 35/72 engines` (Source: threat_intelligence)\n\n\n\n## Appendix\n\n\n\n---\n*Report generated by ThreatSentinel SOC Agent v2.0*\n*Classification: INTERNAL*",
+    "json": "{\n  \"metadata\": {\n    \"event_id\": \"evt_20260303_110858_840\",\n    \"report_version\": \"2.0\",\n    \"generated_at\": \"2026-03-03T11:08:58.313735\",\n    \"investigation_duration_minutes\": 0.0,\n    \"agent_version\": \"2.0.0\",\n    \"classification\": \"INTERNAL\",\n    \"status\": \"COMPLETED\"\n  },\n  \"executive_summary\": \"This investigation analyzed a phishing_attempt security event involving source IP 203.0.113.45.\\nAfter gathering intelligence from 2 external sources and performing risk analysis,\\nthe event has been classified as **HIGH** risk (score: 0.71/1.0).\\n\\nThe investigation determined that this event poses significant security risk and requires immediate attention.\\n\\n\\u26a0\\ufe0f  **High-confidence threat intelligence indicates malicious activity.**\\n\\n\\ud83d\\udccb **2 prioritized response actions have been recommended.**\",\n  \"event_analysis\": {\n    \"event_type\": \"phishing_attempt\",\n    \"source_ip\": \"203.0.113.45\",\n    \"detection_time\": \"2026-03-03T11:08:58.298225\",\n    \"user_agent\": null,\n    \"payload_summary\": \"Structured data with 3 fields\",\n    \"event_characteristics\": [\n      \"Source IP: 203.0.113.45\",\n      \"Payload data included\"\n    ]\n  },\n  \"threat_intelligence\": {\n    \"sources_consulted\": [\n      \"registry\",\n      \"registry\"\n    ],\n    \"overall_reputation_score\": 1.0,\n    \"confidence\": 1.0,\n    \"threat_indicators\": [\n      \"[virustotal] Associated with 2 malicious URLs\",\n      \"[virustotal] Associated with 9 malicious files\",\n      \"[virustotal] ASN: HETZNER-AS\",\n      \"[virustotal] Country: UA\",\n      \"[abuseipdb] Abuse confidence: 94%\",\n      \"[abuseipdb] Total reports: 104\",\n      \"[abuseipdb] Usage type: Data Center/Web Hosting/Transit\",\n      \"[abuseipdb] ISP: Microsoft Corporation\",\n      \"[abuseipdb] Country: NL\",\n      \"[shodan] Open ports: 6 (21, 445, 995, 3306, 8888, 9200)\",\n      \"[shodan] Known vulnerabilities: CVE-2021-26855, CVE-2023-4966, CVE-2023-23397, CVE-2019-0708, CVE-2023-44487\",\n      \"[shodan] Organization: Cloudflare Inc.\",\n      \"[shodan] Location: Amsterdam, US\",\n      \"[virustotal] Detected as malicious by 35/72 engines\"\n    ],\n    \"source_details\": []\n  },\n  \"risk_assessment\": {\n    \"overall_score\": 0.71,\n    \"risk_level\": \"high\",\n    \"confidence\": 0.7999999999999999,\n    \"component_scores\": {\n      \"base_risk\": 0.7,\n      \"intelligence_risk\": 1.0,\n      \"pattern_risk\": 0.0\n    },\n    \"risk_factors\": [\n      \"External threat intelligence indicates malicious activity\"\n    ],\n    \"mitigating_factors\": []\n  },\n  \"recommended_actions\": [\n    {\n      \"action_type\": \"INVESTIGATE\",\n      \"priority\": 2,\n      \"description\": \"Conduct detailed investigation\",\n      \"estimated_effort\": \"30 minutes\",\n      \"technical_details\": \"\",\n      \"urgency\": \"HIGH\"\n    },\n    {\n      \"action_type\": \"MONITOR\",\n      \"priority\": 3,\n      \"description\": \"Enhanced monitoring for 24 hours\",\n      \"estimated_effort\": \"10 minutes setup\",\n      \"technical_details\": \"\",\n      \"urgency\": \"MEDIUM\"\n    }\n  ],\n  \"investigation_timeline\": [\n    \"=== INITIAL ASSESSMENT ===\",\n    \"Event type: phishing_attempt, Base severity: 0.7\",\n    \"=== INTELLIGENCE GATHERING ===\",\n    \"Querying IP reputation for: 203.0.113.45\",\n    \"Querying URL reputation for: http://g00gle-security-alert.com/verify\",\n    \"Gathered intelligence from 2 sources\",\n    \"=== RISK ANALYSIS ===\",\n    \"Base risk score: 0.70\",\n    \"Intelligence risk modifier: 1.00\",\n    \"Pattern analysis risk: 0.00\",\n    \"Final risk assessment: HIGH (0.71)\",\n    \"=== ACTION PLANNING ===\",\n    \"Generated 2 prioritized actions\",\n    \"Priority 1: INVESTIGATE - Conduct detailed investigation\",\n    \"Priority 2: MONITOR - Enhanced monitoring for 24 hours\",\n    \"No active integrations configured \\u2014 actions are recommendations only\"\n  ],\n  \"technical_details\": {\n    \"investigation_phases\": [],\n    \"tools_used\": [],\n    \"pattern_insights\": [],\n    \"network_analysis\": {\n      \"source_ip_analysis\": {\n        \"ip\": \"203.0.113.45\",\n        \"reputation_score\": 1.0,\n        \"is_internal\": false\n      },\n      \"geographic_indicators\": {},\n      \"network_behavior\": []\n    },\n    \"behavioral_analysis\": {\n      \"user_agent_analysis\": {},\n      \"timing_analysis\": {},\n      \"payload_analysis\": {}\n    }\n  },\n  \"indicators\": [\n    {\n      \"type\": \"ip\",\n      \"value\": \"203.0.113.45\",\n      \"confidence\": 1.0,\n      \"source\": \"investigation\",\n      \"description\": \"Source IP with reputation score 1.00\"\n    },\n    {\n      \"type\": \"url\",\n      \"value\": \"http://g00gle-security-alert.com/verify\",\n      \"confidence\": 0.5,\n      \"source\": \"investigation\",\n      \"description\": \"Suspicious URL from event data\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[virustotal] Associated with 2 malicious URLs\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[virustotal] Associated with 9 malicious files\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[virustotal] ASN: HETZNER-AS\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[virustotal] Country: UA\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[abuseipdb] Abuse confidence: 94%\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[abuseipdb] Total reports: 104\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[abuseipdb] Usage type: Data Center/Web Hosting/Transit\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[abuseipdb] ISP: Microsoft Corporation\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[abuseipdb] Country: NL\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[shodan] Open ports: 6 (21, 445, 995, 3306, 8888, 9200)\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[shodan] Known vulnerabilities: CVE-2021-26855, CVE-2023-4966, CVE-2023-23397, CVE-2019-0708, CVE-2023-44487\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[shodan] Organization: Cloudflare Inc.\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[shodan] Location: Amsterdam, US\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    },\n    {\n      \"type\": \"intelligence\",\n      \"value\": \"[virustotal] Detected as malicious by 35/72 engines\",\n      \"confidence\": 0.7,\n      \"source\": \"threat_intelligence\",\n      \"description\": \"Threat intelligence indicator\"\n    }\n  ],\n  \"raw_data\": {},\n  \"formats\": {\n    \"markdown\": \"\\n# Security Incident Investigation Report\\n\\n**Event ID:** evt_20260303_110858_840\\n**Investigation Date:** 2026-03-03 11:08:58 UTC\\n**Duration:** 0.0 minutes\\n**Risk Level:** HIGH\\n\\n## Executive Summary\\n\\nThis investigation analyzed a phishing_attempt security event involving source IP 203.0.113.45.\\nAfter gathering intelligence from 2 external sources and performing risk analysis,\\nthe event has been classified as **HIGH** risk (score: 0.71/1.0).\\n\\nThe investigation determined that this event poses significant security risk and requires immediate attention.\\n\\n\\u26a0\\ufe0f  **High-confidence threat intelligence indicates malicious activity.**\\n\\n\\ud83d\\udccb **2 prioritized response actions have been recommended.**\\n\\n## Event Details\\n\\n**Event Type:** phishing_attempt\\n**Source IP:** 203.0.113.45\\n**Detection Time:** N/A\\n\\n**Url:** http://g00gle-security-alert.com/verify\\n**Payload:** {'sender': 'security@g00gle-alert.com', 'subject': 'Urgent: Account Verification Required', 'targets': 23}\\n\\n## Threat Intelligence Analysis\\n\\nConsulted 2 threat intelligence sources with maximum reputation score of 1.00 and overall confidence of 100.0%.\\n\\n### Intelligence Sources\\n\\n\\n## Risk Assessment\\n\\n**Overall Risk Score:** 0.71/1.0 (HIGH)\\n\\n| Component | Score | Weight | Contribution |\\n|-----------|-------|--------|--------------|\\n| Base Risk | 0.7 | 30% | 0.21 |\\n| Intelligence Risk | 1.0 | 50% | 0.5 |\\n| Pattern Risk | 0.0 | 20% | 0.0 |\\n\\n**Confidence Level:** 80.0%\\n\\nThe event demonstrates significant threat indicators and requires immediate attention and response. External threat intelligence confirms malicious activity.\\n\\n## Recommended Actions\\n\\n### 1. INVESTIGATE (Priority 2)\\n\\n**Description:** Conduct detailed investigation\\n**Estimated Effort:** 30 minutes\\n\\n\\n### 2. MONITOR (Priority 3)\\n\\n**Description:** Enhanced monitoring for 24 hours\\n**Estimated Effort:** 10 minutes setup\\n\\n\\n\\n\\n## Investigation Timeline\\n\\n- === INITIAL ASSESSMENT ===\\n- Event type: phishing_attempt, Base severity: 0.7\\n- === INTELLIGENCE GATHERING ===\\n- Querying IP reputation for: 203.0.113.45\\n- Querying URL reputation for: http://g00gle-security-alert.com/verify\\n- Gathered intelligence from 2 sources\\n- === RISK ANALYSIS ===\\n- Base risk score: 0.70\\n- Intelligence risk modifier: 1.00\\n- Pattern analysis risk: 0.00\\n- Final risk assessment: HIGH (0.71)\\n- === ACTION PLANNING ===\\n- Generated 2 prioritized actions\\n- Priority 1: INVESTIGATE - Conduct detailed investigation\\n- Priority 2: MONITOR - Enhanced monitoring for 24 hours\\n- No active integrations configured \\u2014 actions are recommendations only\\n\\n\\n## Technical Details\\n\\n\\n\\n### Indicators of Compromise (IoCs)\\n\\n- **ip**: `203.0.113.45` (Source: investigation)\\n- **url**: `http://g00gle-security-alert.com/verify` (Source: investigation)\\n- **intelligence**: `[virustotal] Associated with 2 malicious URLs` (Source: threat_intelligence)\\n- **intelligence**: `[virustotal] Associated with 9 malicious files` (Source: threat_intelligence)\\n- **intelligence**: `[virustotal] ASN: HETZNER-AS` (Source: threat_intelligence)\\n- **intelligence**: `[virustotal] Country: UA` (Source: threat_intelligence)\\n- **intelligence**: `[abuseipdb] Abuse confidence: 94%` (Source: threat_intelligence)\\n- **intelligence**: `[abuseipdb] Total reports: 104` (Source: threat_intelligence)\\n- **intelligence**: `[abuseipdb] Usage type: Data Center/Web Hosting/Transit` (Source: threat_intelligence)\\n- **intelligence**: `[abuseipdb] ISP: Microsoft Corporation` (Source: threat_intelligence)\\n- **intelligence**: `[abuseipdb] Country: NL` (Source: threat_intelligence)\\n- **intelligence**: `[shodan] Open ports: 6 (21, 445, 995, 3306, 8888, 9200)` (Source: threat_intelligence)\\n- **intelligence**: `[shodan] Known vulnerabilities: CVE-2021-26855, CVE-2023-4966, CVE-2023-23397, CVE-2019-0708, CVE-2023-44487` (Source: threat_intelligence)\\n- **intelligence**: `[shodan] Organization: Cloudflare Inc.` (Source: threat_intelligence)\\n- **intelligence**: `[shodan] Location: Amsterdam, US` (Source: threat_intelligence)\\n- **intelligence**: `[virustotal] Detected as malicious by 35/72 engines` (Source: threat_intelligence)\\n\\n\\n\\n## Appendix\\n\\n\\n\\n---\\n*Report generated by ThreatSentinel SOC Agent v2.0*\\n*Classification: INTERNAL*\"\n  }\n}"
+  }
+}

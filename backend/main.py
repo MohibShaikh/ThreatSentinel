@@ -46,6 +46,16 @@ async def lifespan(app: FastAPI):
 
     try:
         # Initialize SOC Agent
+        llm_config = {}
+        if settings.llm_api_key:
+            llm_config = {
+                'provider': settings.llm_provider,
+                'api_key': settings.llm_api_key,
+                'model': settings.llm_model,
+                'temperature': settings.llm_temperature,
+                'max_tokens': settings.llm_max_tokens,
+            }
+
         agent_config = {
             'api_keys': {
                 'virustotal': settings.virustotal_api_key,
@@ -60,6 +70,7 @@ async def lifespan(app: FastAPI):
                 'reports_dir': settings.reports_dir,
                 'auto_save': True
             },
+            'llm': llm_config,
             'confidence_threshold': settings.confidence_threshold,
             'emergency_threshold': settings.emergency_threshold,
             'max_investigation_time': settings.max_investigation_time
@@ -109,15 +120,30 @@ def get_soc_agent() -> SOCAgentPlanner:
     return soc_agent
 
 
-# Authentication dependency (optional)
+# Authentication dependency
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Simple token-based authentication (implement as needed)"""
-    if credentials is None:
-        return None  # Allow unauthenticated access for demo
+    """Bearer token authentication using the configured secret key."""
+    settings = get_settings()
 
-    # Implement token validation here
-    # For demo purposes, accept any token
-    return {"user_id": "demo_user"}
+    if credentials is None:
+        if settings.debug:
+            return {"user_id": "debug_user", "role": "admin"}
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    import hmac
+    expected = settings.secret_key
+    if not hmac.compare_digest(credentials.credentials, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return {"user_id": "api_user", "role": "admin"}
 
 
 # Include routers

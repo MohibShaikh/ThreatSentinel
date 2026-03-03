@@ -1,0 +1,140 @@
+{
+  "suspicious_ip": {
+    "ip_patterns": {
+      "185.220.101.34": {
+        "count": 1,
+        "total_risk": 0.71,
+        "event_ids": [
+          "evt_20260303_110858_7901"
+        ],
+        "avg_risk": 0.71
+      }
+    },
+    "time_patterns": {
+      "11": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_7901"
+        ]
+      }
+    },
+    "payload_patterns": {
+      "admin": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_7901"
+        ]
+      },
+      "login": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_7901"
+        ]
+      }
+    },
+    "risk_patterns": {}
+  },
+  "malware_detection": {
+    "ip_patterns": {
+      "10.0.5.87": {
+        "count": 1,
+        "total_risk": 0.74,
+        "event_ids": [
+          "evt_20260303_110858_9376"
+        ],
+        "avg_risk": 0.74
+      }
+    },
+    "time_patterns": {
+      "11": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_9376"
+        ]
+      }
+    },
+    "payload_patterns": {},
+    "risk_patterns": {}
+  },
+  "phishing_attempt": {
+    "ip_patterns": {
+      "203.0.113.45": {
+        "count": 1,
+        "total_risk": 0.71,
+        "event_ids": [
+          "evt_20260303_110858_840"
+        ],
+        "avg_risk": 0.71
+      }
+    },
+    "time_patterns": {
+      "11": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_840"
+        ]
+      }
+    },
+    "payload_patterns": {},
+    "risk_patterns": {}
+  },
+  "ddos_signs": {
+    "ip_patterns": {
+      "198.51.100.200": {
+        "count": 1,
+        "total_risk": 0.71,
+        "event_ids": [
+          "evt_20260303_110858_6692"
+        ],
+        "avg_risk": 0.71
+      }
+    },
+    "time_patterns": {
+      "11": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_6692"
+        ]
+      }
+    },
+    "payload_patterns": {},
+    "risk_patterns": {}
+  },
+  "login_anomaly": {
+    "ip_patterns": {
+      "192.168.1.205": {
+        "count": 1,
+        "total_risk": 0.65,
+        "event_ids": [
+          "evt_20260303_110858_7721"
+        ],
+        "avg_risk": 0.65
+      }
+    },
+    "time_patterns": {
+      "11": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_7721"
+        ]
+      }
+    },
+    "payload_patterns": {
+      "login": {
+        "count": 1,
+        "high_risk_count": 1,
+        "event_ids": [
+          "evt_20260303_110858_7721"
+        ]
+      }
+    },
+    "risk_patterns": {}
+  }
+}
