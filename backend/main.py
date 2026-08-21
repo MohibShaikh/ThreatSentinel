@@ -9,7 +9,7 @@ import logging
 import json
 import os
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
