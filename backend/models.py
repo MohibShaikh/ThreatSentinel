@@ -214,9 +214,9 @@ class MonitoringMetrics(BaseModel):
     completed_investigations_today: int = Field(..., description="Investigations completed today")
     average_investigation_time: float = Field(..., description="Average investigation time today")
     high_risk_events_today: int = Field(..., description="High/critical risk events today")
-    api_response_time: float = Field(..., description="Average API response time")
+    api_response_time: Optional[float] = Field(None, description="Average API response time, null when not instrumented")
     memory_usage_mb: float = Field(..., description="Current memory usage in MB")
-    threat_intel_api_calls: Dict[str, int] = Field(..., description="API calls by source")
+    threat_intel_api_calls: Dict[str, int] = Field(default_factory=dict, description="API calls by source, empty when no calls were made")
     error_rate: float = Field(..., description="Current error rate percentage")
 
 
@@ -231,7 +231,7 @@ class AlertConfiguration(BaseModel):
 
 class EventSubscription(BaseModel):
     """Model for real-time event subscriptions"""
-    subscription_id: str = Field(..., description="Unique subscription identifier")
+    subscription_id: str = Field(default="", description="Unique subscription identifier, assigned by the server when empty")
     event_types: List[EventType] = Field(..., description="Event types to subscribe to")
     risk_levels: List[RiskLevel] = Field(default=[], description="Risk levels to filter by")
     webhook_url: Optional[str] = Field(default=None, description="Webhook URL for notifications")

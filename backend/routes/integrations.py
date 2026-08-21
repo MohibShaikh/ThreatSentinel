@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from datetime import datetime
 
-from backend.main import get_current_user
+from backend.deps import get_current_user
 from agent.integrations.base import ActionType
 
 logger = logging.getLogger(__name__)
@@ -56,9 +56,8 @@ async def list_integrations(
     try:
         global integration_registry
         if not integration_registry:
-            # Initialize integration registry from SOC agent
-            from agent.integrations.registry import IntegrationRegistry
-            integration_registry = IntegrationRegistry({})
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         status = integration_registry.get_registry_status()
 
@@ -118,7 +117,8 @@ async def get_integration(
     try:
         global integration_registry
         if not integration_registry:
-            raise HTTPException(status_code=404, detail="Integration registry not initialized")
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         integration = integration_registry.get_integration(integration_name)
         if not integration:
@@ -149,7 +149,8 @@ async def test_integration(
     try:
         global integration_registry
         if not integration_registry:
-            raise HTTPException(status_code=404, detail="Integration registry not initialized")
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         test_result = await integration_registry.test_integration(integration_name)
 
@@ -176,7 +177,8 @@ async def execute_action(
     try:
         global integration_registry
         if not integration_registry:
-            raise HTTPException(status_code=404, detail="Integration registry not initialized")
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         # Add audit context
         audit_context = {
@@ -232,7 +234,8 @@ async def execute_bulk_actions(
     try:
         global integration_registry
         if not integration_registry:
-            raise HTTPException(status_code=404, detail="Integration registry not initialized")
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         # Add audit context
         audit_context = {
@@ -289,7 +292,8 @@ async def get_action_capabilities(
     try:
         global integration_registry
         if not integration_registry:
-            raise HTTPException(status_code=404, detail="Integration registry not initialized")
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         supporting_integrations = integration_registry.get_integrations_by_action(action_type)
 
@@ -324,8 +328,8 @@ async def connect_integrations(
     try:
         global integration_registry
         if not integration_registry:
-            from agent.integrations.registry import IntegrationRegistry
-            integration_registry = IntegrationRegistry({})
+            from backend.deps import get_soc_agent
+            integration_registry = get_soc_agent().integrations
 
         connection_results = await integration_registry.connect_all()
 
@@ -401,84 +405,3 @@ async def health_check_integrations(
         logger.error(f"Error performing health check: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to perform health check: {str(e)}")
 
-
-@router.get("/logs/{integration_name}", response_model=Dict[str, Any], summary="Get Integration Logs")
-async def get_integration_logs(
-    integration_name: str,
-    limit: int = 100,
-    current_user: str = Depends(get_current_user)
-):
-    """
-    Get recent logs for a specific integration (mock implementation)
-    """
-    try:
-        # This is a mock implementation
-        # In production, this would fetch actual logs from logging system
-
-        mock_logs = [
-            {
-                "timestamp": datetime.utcnow().isoformat(),
-                "level": "INFO",
-                "message": f"Integration {integration_name} is operational",
-                "details": {"action": "status_check", "result": "success"}
-            },
-            {
-                "timestamp": datetime.utcnow().isoformat(),
-                "level": "DEBUG",
-                "message": f"Connection test successful for {integration_name}",
-                "details": {"response_time": "0.25s"}
-            }
-        ]
-
-        return {
-            "integration_name": integration_name,
-            "logs": mock_logs[:limit],
-            "total_logs": len(mock_logs),
-            "fetched_at": datetime.utcnow().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting logs for {integration_name}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get logs: {str(e)}")
-
-
-@router.get("/metrics", response_model=Dict[str, Any], summary="Get Integration Metrics")
-async def get_integration_metrics(
-    timeframe: str = "24h",
-    current_user: str = Depends(get_current_user)
-):
-    """
-    Get metrics for all integrations (mock implementation)
-    """
-    try:
-        # Mock metrics implementation
-        # In production, this would fetch actual metrics from monitoring system
-
-        mock_metrics = {
-            "timeframe": timeframe,
-            "total_actions_executed": 156,
-            "successful_actions": 148,
-            "failed_actions": 8,
-            "average_response_time": 1.2,
-            "integration_usage": {
-                "slack": {"actions": 45, "success_rate": 0.98},
-                "email": {"actions": 32, "success_rate": 1.0},
-                "palo_alto": {"actions": 28, "success_rate": 0.89},
-                "splunk": {"actions": 51, "success_rate": 0.96}
-            },
-            "action_breakdown": {
-                "send_alert": 67,
-                "block_ip": 28,
-                "create_incident": 35,
-                "notify": 26
-            }
-        }
-
-        return {
-            "metrics": mock_metrics,
-            "collected_at": datetime.utcnow().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting integration metrics: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")

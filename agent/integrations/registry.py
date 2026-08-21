@@ -259,7 +259,7 @@ class IntegrationRegistry:
         return responses
 
     def get_registry_status(self) -> Dict[str, Any]:
-        """Get comprehensive status of all integrations"""
+        """Get status of all integrations"""
         status = {
             "total_configured": len(self.integrations),
             "total_active": len(self.active_integrations),

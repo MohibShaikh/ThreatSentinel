@@ -13,9 +13,9 @@ the event has been classified as **HIGH** risk (score: 0.72/1.0).
 
 The investigation determined that this event poses significant security risk and requires immediate attention.
 
-⚠️  **High-confidence threat intelligence indicates malicious activity.**
+**High-confidence threat intelligence indicates malicious activity.**
 
-📋 **4 prioritized response actions have been recommended.**
+**4 prioritized response actions have been recommended.**
 
 ## Event Details
 

@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime
 import ipaddress
 import validators
-from .mock_intel import get_mock_response
 
 
 @dataclass
@@ -41,7 +40,6 @@ class BaseTool(ABC):
         self.config = config or {}
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self._session = None
-        self.use_mocks = not bool(api_key) or self.config.get("use_mocks", False)
 
     async def __aenter__(self):
         self._session = aiohttp.ClientSession()
@@ -89,7 +87,7 @@ class VirusTotalTool(BaseTool):
         self._last_request_time = time.monotonic()
 
     def _parse_ip_response(self, data: Dict[str, Any]) -> ToolResult:
-        """Parse a VT IP response (real or mock) into a ToolResult."""
+        """Parse a VT IP response into a ToolResult."""
         reputation_score = 0.0
         indicators = []
 
@@ -120,10 +118,11 @@ class VirusTotalTool(BaseTool):
         try:
             ipaddress.ip_address(ip)
 
-            if self.use_mocks:
-                data = get_mock_response("virustotal", "ip", ip)
-                self.logger.info(f"[MOCK] VirusTotal IP query for {ip}")
-                return self._parse_ip_response(data)
+            if not self.api_key:
+                return ToolResult(
+                    success=False, source="virustotal",
+                    data={}, error="VirusTotal API key not configured"
+                )
 
             await self._enforce_rate_limit()
             url = f"{self.base_url}/ip-address/report"
@@ -156,18 +155,10 @@ class VirusTotalTool(BaseTool):
             if not validators.url(url):
                 raise ValueError("Invalid URL format")
 
-            if self.use_mocks:
-                data = get_mock_response("virustotal", "url", url)
-                self.logger.info(f"[MOCK] VirusTotal URL query for {url}")
-                positives = data.get('positives', 0)
-                total = data.get('total', 1)
-                rep = positives / total if total > 0 else 0.0
-                indicators = []
-                if positives > 0:
-                    indicators.append(f"Detected as malicious by {positives}/{total} engines")
+            if not self.api_key:
                 return ToolResult(
-                    success=True, source="virustotal",
-                    data={'reputation_score': rep, 'indicators': indicators, 'raw_response': data}
+                    success=False, source="virustotal",
+                    data={}, error="VirusTotal API key not configured"
                 )
 
             await self._enforce_rate_limit()
@@ -230,20 +221,10 @@ class VirusTotalTool(BaseTool):
     async def query_file_hash(self, file_hash: str) -> ToolResult:
         """Query file hash reputation from VirusTotal"""
         try:
-            if self.use_mocks:
-                data = get_mock_response("virustotal", "file", file_hash)
-                self.logger.info(f"[MOCK] VirusTotal file query for {file_hash}")
-                positives = data.get('positives', 0)
-                total = data.get('total', 1)
-                rep = positives / total if total > 0 else 0.0
-                indicators = []
-                if positives > 0:
-                    indicators.append(f"Detected as malware by {positives}/{total} engines")
-                if data.get('scan_date'):
-                    indicators.append(f"Last scanned: {data['scan_date']}")
+            if not self.api_key:
                 return ToolResult(
-                    success=True, source="virustotal",
-                    data={'reputation_score': rep, 'indicators': indicators, 'raw_response': data}
+                    success=False, source="virustotal",
+                    data={}, error="VirusTotal API key not configured"
                 )
 
             await self._enforce_rate_limit()
@@ -332,10 +313,11 @@ class AbuseIPDBTool(BaseTool):
         try:
             ipaddress.ip_address(ip)
 
-            if self.use_mocks:
-                data = get_mock_response("abuseipdb", "ip", ip)
-                self.logger.info(f"[MOCK] AbuseIPDB query for {ip}")
-                return self._parse_ip_response(data)
+            if not self.api_key:
+                return ToolResult(
+                    success=False, source="abuseipdb",
+                    data={}, error="AbuseIPDB API key not configured"
+                )
 
             url = f"{self.base_url}/check"
             headers = {
@@ -385,7 +367,7 @@ class URLVoidTool(BaseTool):
 
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         super().__init__(api_key, config)
-        self.base_url = "http://api.urlvoid.com/1000"
+        self.base_url = "https://api.urlvoid.com/1000"
 
     async def query_ip(self, ip: str) -> ToolResult:
         """URLVoid doesn't support direct IP checking"""
@@ -513,10 +495,11 @@ class ShodanTool(BaseTool):
         try:
             ipaddress.ip_address(ip)
 
-            if self.use_mocks:
-                data = get_mock_response("shodan", "ip", ip)
-                self.logger.info(f"[MOCK] Shodan query for {ip}")
-                return self._parse_ip_response(data)
+            if not self.api_key:
+                return ToolResult(
+                    success=False, source="shodan",
+                    data={}, error="Shodan API key not configured"
+                )
 
             url = f"{self.base_url}/shodan/host/{ip}"
             params = {'key': self.api_key}
@@ -564,14 +547,13 @@ class ToolRegistry:
     def __init__(self, api_keys: Dict[str, str], config: Dict[str, Any] = None):
         self.api_keys = api_keys
         self.config = config or {}
-        self.use_mocks = self.config.get('use_mocks', False)
         self.logger = logging.getLogger(__name__)
 
         self.tools = {}
         self._initialize_tools()
 
     def _initialize_tools(self):
-        """Initialize all available tools. Tools without API keys use mock data."""
+        """Initialize tools that have API keys configured."""
 
         tool_classes = {
             'virustotal': VirusTotalTool,
@@ -581,10 +563,7 @@ class ToolRegistry:
 
         for name, cls in tool_classes.items():
             key = self.api_keys.get(name, '')
-            tool_config = self.config.get(name, {})
-            if self.use_mocks:
-                tool_config['use_mocks'] = True
-            self.tools[name] = cls(key or '', tool_config)
+            self.tools[name] = cls(key or '', self.config.get(name, {}))
 
         if self.api_keys.get('urlvoid'):
             self.tools['urlvoid'] = URLVoidTool(
@@ -592,11 +571,11 @@ class ToolRegistry:
                 self.config.get('urlvoid', {})
             )
 
-        live = [n for n, t in self.tools.items() if not t.use_mocks]
-        mock = [n for n, t in self.tools.items() if t.use_mocks]
+        live = [n for n, t in self.tools.items() if t.api_key]
+        unconfigured = [n for n, t in self.tools.items() if not t.api_key]
         self.logger.info(
             f"Initialized {len(self.tools)} tools: "
-            f"live={live or 'none'}, mock={mock or 'none'}"
+            f"configured={live or 'none'}, missing_keys={unconfigured or 'none'}"
         )
 
     async def _query_with_sessions(self, available_sources: List[str],
