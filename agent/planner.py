@@ -103,6 +103,9 @@ class SOCAgentPlanner:
         # Planning parameters
         self.confidence_threshold = config.get('confidence_threshold', 0.7)
         self.emergency_threshold = config.get('emergency_threshold', 0.8)
+        # Added to the final score when no intel source answered, so an
+        # agent that cannot see never scores as if it looked and saw clean.
+        self.INTEL_UNCERTAINTY_FLOOR = 0.25
         self.max_investigation_time = config.get('max_investigation_time', 300)
 
         self.review_threshold = config.get('review_threshold', 0.6)
@@ -460,7 +463,13 @@ class SOCAgentPlanner:
 
         # Incorporate threat intelligence
         intel_risk = self._calculate_intel_risk(context.intelligence_data)
-        context.reasoning_log.append(f"Intelligence risk modifier: {intel_risk:.2f}")
+        if intel_risk is None:
+            context.reasoning_log.append(
+                "Intelligence unavailable: weight redistributed to event "
+                "evidence with uncertainty floor"
+            )
+        else:
+            context.reasoning_log.append(f"Intelligence risk modifier: {intel_risk:.2f}")
 
         # Consider historical patterns
         pattern_risk = await self._calculate_pattern_risk(context)
@@ -473,11 +482,20 @@ class SOCAgentPlanner:
             llm_risk = float(llm_analysis.get('risk_modifier', 0.0))
             context.reasoning_log.append(f"LLM risk modifier applied: {llm_risk:.2f}")
 
-        if llm_analysis:
+        if intel_risk is None:
+            # Blind on intel: lean on event evidence, never score as if clean.
+            if llm_analysis:
+                final_risk = (base_risk * 0.45) + (pattern_risk * 0.15) \
+                    + (llm_risk * 0.3) + self.INTEL_UNCERTAINTY_FLOOR
+            else:
+                final_risk = (base_risk * 0.7) + (pattern_risk * 0.1) \
+                    + self.INTEL_UNCERTAINTY_FLOOR
+        elif llm_analysis:
             final_risk = (base_risk * 0.2) + (intel_risk * 0.35) + (pattern_risk * 0.15) + (llm_risk * 0.3)
         else:
             final_risk = (base_risk * 0.3) + (intel_risk * 0.5) + (pattern_risk * 0.2)
 
+        final_risk = min(final_risk, 1.0)
         risk_level = self._determine_risk_level(final_risk)
 
         context.risk_assessment = {
@@ -485,6 +503,7 @@ class SOCAgentPlanner:
             'risk_level': risk_level,
             'base_risk': base_risk,
             'intel_risk': intel_risk,
+            'intel_available': intel_risk is not None,
             'pattern_risk': pattern_risk,
             'llm_risk': llm_risk,
             'llm_analysis': llm_analysis,
@@ -618,8 +637,13 @@ class SOCAgentPlanner:
         base_severity = severity_map.get(event_type, 0.3)
 
         # Adjust based on event characteristics
-        if event_data.get('payload', {}).get('failed_login_attempts', 0) > 10:
+        attempts = event_data.get('payload', {}).get('failed_login_attempts', 0)
+        if attempts > 50:
+            base_severity += 0.3
+        elif attempts > 10:
             base_severity += 0.2
+        elif attempts > 3:
+            base_severity += 0.1
 
         if event_data.get('internal_source', False):
             base_severity += 0.1  # Internal threats often more serious
@@ -664,10 +688,15 @@ class SOCAgentPlanner:
         """Calculate base risk score from event characteristics"""
         return self._classify_event_severity(event_data)
 
-    def _calculate_intel_risk(self, intel_data: Dict[str, Any]) -> float:
-        """Calculate risk modifier from threat intelligence"""
+    def _calculate_intel_risk(self, intel_data: Dict[str, Any]) -> Optional[float]:
+        """Calculate risk modifier from threat intelligence.
+
+        Returns None when no source answered. Absence of intelligence is
+        uncertainty, not safety: callers must not treat it as a clean
+        reputation score of zero.
+        """
         if not intel_data or not intel_data.get('sources'):
-            return 0.0
+            return None
 
         reputation_score = intel_data.get('reputation_score', 0.0)
         num_indicators = len(intel_data.get('threat_indicators', []))
