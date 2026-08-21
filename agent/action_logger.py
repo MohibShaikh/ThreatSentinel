@@ -1,5 +1,5 @@
 """
-ThreatSentinel SOC Agent - Comprehensive Action Logging
+ThreatSentinel SOC Agent action logging
 
 Provides detailed logging of all agent actions, decisions, integrations,
 and outcomes for audit trails, compliance, and continuous learning.
@@ -94,7 +94,7 @@ class ActionLog:
 
 class ActionLogger:
     """
-    Comprehensive action logging system for ThreatSentinel SOC Agent.
+    Action logging system for ThreatSentinel SOC Agent.
 
     Features:
     - Detailed action tracking with metadata
@@ -167,7 +167,7 @@ class ActionLogger:
 
         action_log = ActionLog(
             id=str(uuid.uuid4()),
-            timestamp=datetime.now(),
+            timestamp=datetime.utcnow(),
             investigation_id=investigation_id,
             action_type=action_type,
             status=status,
@@ -370,7 +370,7 @@ class ActionLogger:
     def get_component_performance(self, component: str,
                                  hours: int = 24) -> Dict[str, Any]:
         """Get performance metrics for a specific component."""
-        since = datetime.now() - timedelta(hours=hours)
+        since = datetime.utcnow() - timedelta(hours=hours)
 
         with sqlite3.connect(self.db_path) as conn:
             # Total actions
@@ -426,7 +426,7 @@ class ActionLogger:
 
     def get_system_health(self, hours: int = 1) -> Dict[str, Any]:
         """Get overall system health metrics."""
-        since = datetime.now() - timedelta(hours=hours)
+        since = datetime.utcnow() - timedelta(hours=hours)
 
         with sqlite3.connect(self.db_path) as conn:
             # Overall stats
@@ -507,7 +507,7 @@ class ActionLogger:
 
     def cleanup_old_logs(self, days: int = 90) -> int:
         """Clean up old action logs."""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("""
@@ -549,5 +549,5 @@ class ActionLogger:
             'error_count': error_count,
             'action_breakdown': action_counts,
             'timeline': timeline,
-            'export_timestamp': datetime.now().isoformat()
+            'export_timestamp': datetime.utcnow().isoformat()
         }

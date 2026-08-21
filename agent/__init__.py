@@ -6,7 +6,7 @@ to provide autonomous security incident investigation and response.
 
 Enhanced Features:
 - Priority-based task queue management
-- Comprehensive action logging and audit trails
+- Action logging and audit trails
 - Cross-session memory retention
 - Human oversight integration
 """

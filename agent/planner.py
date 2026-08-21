@@ -15,6 +15,7 @@ from enum import Enum
 from .tools import ToolRegistry
 from .memory import AgentMemory
 from .reporter import IncidentReporter
+from .action_logger import ActionLogger, ActionType, ActionStatus, LogLevel
 from .integrations.registry import IntegrationRegistry
 from .integrations.base import ActionType as IntegrationActionType
 from .llm import create_llm_provider, build_analysis_prompt, BaseLLMProvider
@@ -42,12 +43,20 @@ class InvestigationContext:
     actions_executed: List[Dict[str, Any]] = None
     reasoning_log: List[str] = None
     start_time: datetime = None
+    phases_completed: List[str] = None
 
     def __post_init__(self):
         if self.reasoning_log is None:
             self.reasoning_log = []
         if self.start_time is None:
             self.start_time = datetime.utcnow()
+        if self.phases_completed is None:
+            self.phases_completed = []
+
+    def complete_phase(self):
+        """Mark the current phase as completed"""
+        if self.phase and self.phase.value not in self.phases_completed:
+            self.phases_completed.append(self.phase.value)
 
 
 class SOCAgentPlanner:
@@ -60,7 +69,7 @@ class SOCAgentPlanner:
     3. Performs risk analysis with contextual reasoning
     4. Generates prioritized action recommendations
     5. Updates memory with learned patterns
-    6. **NEW: Triggers human review for high-risk/ambiguous cases**
+    6. Triggers human review for high-risk/ambiguous cases
 
     The planner operates autonomously but escalates to human analysts
     when confidence thresholds are not met or risk levels are critical.
@@ -96,10 +105,12 @@ class SOCAgentPlanner:
         self.emergency_threshold = config.get('emergency_threshold', 0.8)
         self.max_investigation_time = config.get('max_investigation_time', 300)
 
-        # **NEW: Human review parameters**
         self.review_threshold = config.get('review_threshold', 0.6)
         self.escalation_rules = self._load_escalation_rules()
         self.audit_trail = []
+
+        audit_config = config.get('audit', {})
+        self.action_logger = ActionLogger(audit_config.get('db_path', 'data/action_logs.db'))
 
         self.logger.info("SOC Agent Planner initialized with human review capabilities")
 
@@ -178,14 +189,32 @@ class SOCAgentPlanner:
         }
 
         self.audit_trail.append(audit_entry)
+
+        try:
+            action_type = ActionType(event_type)
+        except ValueError:
+            action_type = ActionType.SYSTEM_EVENT
+        failed = event_type == "investigation_failed"
+        self.action_logger.log_action(
+            action_type=action_type,
+            component="SOCAgentPlanner",
+            description=f"{event_type}: {action}",
+            investigation_id=investigation_id,
+            status=ActionStatus.FAILED if failed else ActionStatus.SUCCESS,
+            level=LogLevel.ERROR if failed else LogLevel.INFO,
+            details={"actor": actor, **details},
+        )
+
         self.logger.info(f"Audit: {event_type} - {action} by {actor}")
 
     async def investigate_incident(self, event_data: Dict[str, Any],
-                                  emergency_mode: bool = False) -> Dict[str, Any]:
+                                  emergency_mode: bool = False,
+                                  investigation_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Main investigation orchestration method with human review integration
         """
         event_id = f"evt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(event_data)) % 10000}"
+        audit_id = investigation_id or event_id
 
         context = InvestigationContext(
             event_id=event_id,
@@ -194,35 +223,37 @@ class SOCAgentPlanner:
             intelligence_data={}
         )
 
-        # **NEW: Create initial audit entry**
         await self._create_audit_entry(
-            event_id, "investigation_started", "automatic_investigation_initiated",
+            audit_id, "investigation_started", "automatic_investigation_initiated",
             {"event_type": event_data.get("event_type"), "emergency_mode": emergency_mode}
         )
 
         try:
             # Phase 1: Initial Assessment
             await self._initial_assessment(context, emergency_mode)
+            context.complete_phase()
 
             # Phase 2: Intelligence Gathering
             await self._intelligence_gathering(context, emergency_mode)
+            context.complete_phase()
 
             # Phase 2.5: LLM-Powered Analysis (if configured)
             await self._llm_analysis(context)
 
             # Phase 3: Risk Analysis
             await self._risk_analysis(context, emergency_mode)
+            context.complete_phase()
 
-            # **NEW: Phase 3.5: Human Review Check**
             escalation_check = await self._check_escalation_triggers(context, context.risk_assessment)
 
             if escalation_check and escalation_check["should_escalate"] and not emergency_mode:
                 # Create human review request
                 context.requires_human_review = True
                 context.escalation_details = escalation_check
+                context.recommended_actions = []
 
                 await self._create_audit_entry(
-                    event_id, "human_review_requested", "escalation_triggered",
+                    audit_id, "human_review_requested", "escalation_triggered",
                     escalation_check
                 )
 
@@ -238,19 +269,21 @@ class SOCAgentPlanner:
 
             # Phase 4: Action Planning
             await self._action_planning(context, emergency_mode)
+            context.complete_phase()
 
             # Phase 4.5: Execute Actions via Integrations
             await self._execute_actions(context)
 
             # Phase 5: Generate Report
             await self._generate_report(context)
+            context.complete_phase()
 
             # Phase 6: Update Memory
             await self._update_memory(context)
+            context.complete_phase()
 
-            # **NEW: Final audit entry**
             await self._create_audit_entry(
-                event_id, "investigation_completed", "autonomous_analysis_finished",
+                audit_id, "investigation_completed", "autonomous_analysis_finished",
                 {"risk_score": context.risk_assessment.get('risk_score')}
             )
 
@@ -262,7 +295,7 @@ class SOCAgentPlanner:
 
         except Exception as e:
             await self._create_audit_entry(
-                event_id, "investigation_failed", "error_occurred",
+                audit_id, "investigation_failed", "error_occurred",
                 {"error": str(e), "phase": context.phase.value}
             )
             return await self._handle_investigation_failure(context, e)
@@ -490,7 +523,7 @@ class SOCAgentPlanner:
             return
 
         if not self.integrations.active_integrations:
-            context.reasoning_log.append("No active integrations configured — actions are recommendations only")
+            context.reasoning_log.append("No active integrations configured, actions are recommendations only")
             context.actions_executed = []
             return
 
@@ -550,7 +583,7 @@ class SOCAgentPlanner:
         context.actions_executed = executed
 
     async def _generate_report(self, context: InvestigationContext):
-        """Phase 5: Generate comprehensive incident report"""
+        """Phase 5: Generate incident report"""
         context.phase = InvestigationPhase.REPORTING
 
         report = await self.reporter.generate_report(context)
@@ -653,7 +686,7 @@ class SOCAgentPlanner:
 
         # Analyze patterns in similar events
         high_risk_count = sum(1 for event in similar_events
-                             if event.get('risk_score', 0) > 0.7)
+                             if event.risk_score > 0.7)
 
         pattern_risk = high_risk_count / len(similar_events)
 

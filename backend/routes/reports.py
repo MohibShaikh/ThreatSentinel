@@ -5,6 +5,7 @@ API routes for generating and retrieving investigation reports.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -17,24 +18,26 @@ from ..models import (
     ReportResponse
 )
 from ..config import get_settings
-from ...agent import SOCAgentPlanner
+from agent import SOCAgentPlanner
+from backend.deps import get_current_user, get_soc_agent
 
 
 # Create router
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)], )
 
 logger = logging.getLogger(__name__)
 
+SAFE_ID_PATTERN = re.compile(r'[\w\-]+')
 
-def get_soc_agent() -> SOCAgentPlanner:
-    """Dependency to get SOC agent instance"""
-    from ..main import soc_agent
-    if soc_agent is None:
+
+def _validate_id(value: str, what: str) -> str:
+    """Reject IDs with glob metacharacters or path separators before any filesystem use"""
+    if not SAFE_ID_PATTERN.fullmatch(value):
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SOC Agent not initialized"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {what}"
         )
-    return soc_agent
+    return value
 
 
 @router.post("/generate", response_model=ReportResponse)
@@ -85,21 +88,22 @@ async def generate_report(
         # Generate report using the reporter
         settings = get_settings()
 
-        # Create a mock context object for the reporter
-        class MockContext:
+        # Adapter exposing stored investigation data in the reporter's context shape
+        class ReportContext:
             def __init__(self, investigation_data):
                 self.event_id = investigation_data['id']
                 self.event_data = investigation_data.get('request', {}).get('event_data', {})
                 self.risk_assessment = result.get('risk_assessment', {})
                 self.intelligence_data = result.get('intelligence_data', {})
-                self.recommended_actions = result.get('recommended_actions', [])
+                self.recommended_actions = result.get('recommended_actions') or []
                 self.reasoning_log = result.get('reasoning_log', [])
                 self.start_time = investigation_data.get('created_at', datetime.utcnow())
+                self.phases_completed = result.get('phases_completed', [])
 
-        mock_context = MockContext(investigation)
+        report_context = ReportContext(investigation)
 
         # Generate report
-        report_data = await agent.reporter.generate_report(mock_context)
+        report_data = await agent.reporter.generate_report(report_context)
 
         # Generate report ID
         report_id = f"rpt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{request.investigation_id}"
@@ -116,7 +120,7 @@ async def generate_report(
             content = report_data['formats']['markdown']  # Fallback to markdown
 
         # Save to file if requested (check settings)
-        if settings.get('auto_save_reports', True):
+        if settings.auto_save_reports:
             reports_dir = Path(settings.reports_dir)
             file_name = f"{report_id}.{request.format}"
             file_path = reports_dir / file_name
@@ -157,6 +161,8 @@ async def get_report(report_id: str):
     try:
         settings = get_settings()
         reports_dir = Path(settings.reports_dir)
+
+        _validate_id(report_id, "report ID")
 
         # Look for report files with this ID
         report_files = list(reports_dir.glob(f"{report_id}.*"))
@@ -207,6 +213,8 @@ async def download_report(report_id: str):
         settings = get_settings()
         reports_dir = Path(settings.reports_dir)
 
+        _validate_id(report_id, "report ID")
+
         # Look for report files with this ID
         report_files = list(reports_dir.glob(f"{report_id}.*"))
 
@@ -246,15 +254,16 @@ async def get_investigation_reports(investigation_id: str):
         settings = get_settings()
         reports_dir = Path(settings.reports_dir)
 
+        _validate_id(investigation_id, "investigation ID")
+
         # Look for report files for this investigation
         pattern = f"rpt_*_{investigation_id}.*"
         report_files = list(reports_dir.glob(pattern))
 
         reports = []
         for report_file in report_files:
-            # Parse report ID from filename
-            file_stem = report_file.stem
-            report_id = file_stem.split('_')[0] + '_' + file_stem.split('_')[1] + '_' + investigation_id
+            # The report ID is the full filename stem
+            report_id = report_file.stem
 
             reports.append({
                 'report_id': report_id,
@@ -308,12 +317,9 @@ async def list_reports(
             if format and file_format.lower() != format.lower():
                 continue
 
-            # Parse investigation ID from filename
+            # Parse investigation ID from filename: rpt_<date>_<time>_<investigation_id>
             parts = file_stem.split('_')
-            if len(parts) >= 3:
-                investigation_id = '_'.join(parts[2:])
-            else:
-                investigation_id = 'unknown'
+            investigation_id = '_'.join(parts[3:]) if len(parts) > 3 else 'unknown'
 
             all_reports.append({
                 'report_id': file_stem,
@@ -358,6 +364,8 @@ async def delete_report(report_id: str):
     try:
         settings = get_settings()
         reports_dir = Path(settings.reports_dir)
+
+        _validate_id(report_id, "report ID")
 
         # Look for report files with this ID
         report_files = list(reports_dir.glob(f"{report_id}.*"))
@@ -406,7 +414,7 @@ async def cleanup_reports(
         settings = get_settings()
         reports_dir = Path(settings.reports_dir)
 
-        cutoff_date = datetime.now().timestamp() - (days_old * 24 * 60 * 60)
+        cutoff_date = datetime.utcnow().timestamp() - (days_old * 24 * 60 * 60)
 
         old_reports = []
         total_size = 0

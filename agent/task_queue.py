@@ -54,7 +54,7 @@ class Task:
             'id': self.id,
             'task_type': self.task_type,
             'priority': self.priority.value,
-            'payload': json.dumps(self.payload),
+            'payload': json.dumps(self.payload, default=str),
             'status': self.status.value,
             'created_at': self.created_at.isoformat(),
             'started_at': self.started_at.isoformat() if self.started_at else None,
@@ -62,7 +62,7 @@ class Task:
             'retry_count': self.retry_count,
             'max_retries': self.max_retries,
             'error_message': self.error_message,
-            'result': json.dumps(self.result) if self.result else None,
+            'result': json.dumps(self.result, default=str) if self.result is not None else None,
             'timeout_seconds': self.timeout_seconds
         }
 
@@ -198,7 +198,7 @@ class TaskQueue:
 
             # Mark as in progress
             task.status = TaskStatus.IN_PROGRESS
-            task.started_at = datetime.now()
+            task.started_at = datetime.utcnow()
 
             conn.execute("""
                 UPDATE tasks
@@ -213,7 +213,7 @@ class TaskQueue:
         task = self.active_tasks.get(task_id)
         if task:
             task.status = TaskStatus.COMPLETED
-            task.completed_at = datetime.now()
+            task.completed_at = datetime.utcnow()
             task.result = result
             del self.active_tasks[task_id]
 
@@ -223,8 +223,8 @@ class TaskQueue:
                 SET status = ?, completed_at = ?, result = ?
                 WHERE id = ?
             """, (TaskStatus.COMPLETED.value,
-                  datetime.now().isoformat(),
-                  json.dumps(result) if result else None,
+                  datetime.utcnow().isoformat(),
+                  json.dumps(result, default=str) if result is not None else None,
                   task_id))
 
         logger.info(f"Task {task_id} completed successfully")
@@ -252,7 +252,7 @@ class TaskQueue:
         if task.retry_count >= task.max_retries:
             # Maximum retries reached, mark as failed
             task.status = TaskStatus.FAILED
-            task.completed_at = datetime.now()
+            task.completed_at = datetime.utcnow()
             logger.error(f"Task {task_id} failed permanently after {task.retry_count} retries: {error_message}")
         else:
             # Schedule retry with exponential backoff
@@ -286,7 +286,7 @@ class TaskQueue:
                 UPDATE tasks
                 SET status = ?, completed_at = ?
                 WHERE id = ? AND status IN ('pending', 'in_progress', 'retrying')
-            """, (TaskStatus.CANCELLED.value, datetime.now().isoformat(), task_id))
+            """, (TaskStatus.CANCELLED.value, datetime.utcnow().isoformat(), task_id))
 
             return cursor.rowcount > 0
 
@@ -408,7 +408,7 @@ class TaskQueue:
 
     async def cleanup_old_tasks(self, days: int = 30):
         """Clean up completed/failed tasks older than specified days."""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("""

@@ -2,7 +2,7 @@
 """
 CLI Tool Tester for ThreatSentinel
 
-A comprehensive tool for testing and demonstrating all CLI interactions
+A tool for testing and demonstrating the CLI interactions
 with ThreatSentinel components without requiring API keys or real data.
 """
 

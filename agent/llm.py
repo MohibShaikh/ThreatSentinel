@@ -5,15 +5,15 @@ Unified interface for multiple LLM providers used by the SOC Agent
 for intelligent threat analysis, reasoning, and report generation.
 
 Supported providers:
-- GLM-4 (Zhipu AI)       — OpenAI-compatible API at open.bigmodel.cn
-- OpenAI (GPT-4, etc.)   — api.openai.com
-- Anthropic (Claude)      — api.anthropic.com (Messages API)
-- Google (Gemini)         — generativelanguage.googleapis.com
-- DeepSeek               — api.deepseek.com (OpenAI-compatible)
-- MiniMax                — api.minimax.chat (OpenAI-compatible)
-- Zero-One (Yi / 01.AI)  — api.01.ai (OpenAI-compatible)
-- Groq                   — api.groq.com (OpenAI-compatible)
-- Mistral                — api.mistral.ai (OpenAI-compatible)
+- GLM-4 (Zhipu AI): OpenAI-compatible API at open.bigmodel.cn
+- OpenAI (GPT-4, etc.): api.openai.com
+- Anthropic (Claude): api.anthropic.com, Messages API
+- Google (Gemini): generativelanguage.googleapis.com
+- DeepSeek: api.deepseek.com, OpenAI-compatible
+- MiniMax: api.minimax.chat, OpenAI-compatible
+- Zero-One (Yi / 01.AI): api.01.ai, OpenAI-compatible
+- Groq: api.groq.com, OpenAI-compatible
+- Mistral: api.mistral.ai, OpenAI-compatible
 
 Most providers expose an OpenAI-compatible /chat/completions endpoint,
 so the majority share one code path. Anthropic and Gemini have bespoke
@@ -156,7 +156,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
 
 class AnthropicProvider(BaseLLMProvider):
-    """Anthropic Claude — uses the Messages API."""
+    """Anthropic Claude, uses the Messages API."""
 
     ENDPOINT = "https://api.anthropic.com/v1/messages"
 
@@ -236,7 +236,7 @@ class AnthropicProvider(BaseLLMProvider):
 
 
 class GeminiProvider(BaseLLMProvider):
-    """Google Gemini — uses the generateContent REST API."""
+    """Google Gemini, uses the generateContent REST API."""
 
     ENDPOINT_TEMPLATE = (
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -389,7 +389,7 @@ Your analysis must be structured as JSON with the following fields:
   "urgency": "critical | high | medium | low"
 }
 
-Be precise. Do not hallucinate threat data — only analyze what is provided.
+Be precise. Do not hallucinate threat data. Only analyze what is provided.
 If threat intel data is empty or inconclusive, say so and lower confidence accordingly."""
 
 

@@ -1,7 +1,7 @@
 """
 SOC Agent Reporter - Incident Report Generation
 
-This module generates comprehensive incident reports from investigation
+This module generates incident reports from investigation
 results, providing both human-readable and machine-processable formats.
 """
 
@@ -27,7 +27,7 @@ class IncidentReporter:
     """
     Incident Report Generator for SOC Agent
 
-    Creates comprehensive, structured reports from investigation contexts
+    Creates structured reports from investigation contexts
     with support for multiple output formats (JSON, Markdown, HTML).
     """
 
@@ -85,9 +85,12 @@ class IncidentReporter:
 
 | Component | Score | Weight | Contribution |
 |-----------|-------|--------|--------------|
-| Base Risk | {{ base_risk }} | 30% | {{ (base_risk * 0.3) | round(3) }} |
-| Intelligence Risk | {{ intel_risk }} | 50% | {{ (intel_risk * 0.5) | round(3) }} |
-| Pattern Risk | {{ pattern_risk }} | 20% | {{ (pattern_risk * 0.2) | round(3) }} |
+| Base Risk | {{ base_risk }} | {{ base_weight_pct }} | {{ base_contribution }} |
+| Intelligence Risk | {{ intel_risk }} | {{ intel_weight_pct }} | {{ intel_contribution }} |
+| Pattern Risk | {{ pattern_risk }} | {{ pattern_weight_pct }} | {{ pattern_contribution }} |
+{% if llm_used %}
+| LLM Modifier | {{ llm_risk }} | {{ llm_weight_pct }} | {{ llm_contribution }} |
+{% endif %}
 
 **Confidence Level:** {{ confidence }}%
 
@@ -147,7 +150,7 @@ No specific indicators of compromise identified.
 
     async def generate_report(self, context) -> Dict[str, Any]:
         """
-        Generate comprehensive investigation report
+        Generate investigation report
 
         Args:
             context: InvestigationContext from the planner
@@ -233,11 +236,11 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
 
         # Add specific context based on findings
         if context.intelligence_data.get('reputation_score', 0) > 0.7:
-            summary += "\n\n⚠️  **High-confidence threat intelligence indicates malicious activity.**"
+            summary += "\n\n**High-confidence threat intelligence indicates malicious activity.**"
 
         if len(context.recommended_actions or []) > 0:
             action_count = len(context.recommended_actions)
-            summary += f"\n\n📋 **{action_count} prioritized response actions have been recommended.**"
+            summary += f"\n\n**{action_count} prioritized response actions have been recommended.**"
 
         return summary
 
@@ -320,7 +323,7 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
     def _generate_technical_section(self, context) -> Dict[str, Any]:
         """Generate technical details section"""
         section = {
-            'investigation_phases': [phase.value for phase in context.__dict__.get('phases_completed', [])],
+            'investigation_phases': list(getattr(context, 'phases_completed', [])),
             'tools_used': context.intelligence_data.get('sources_queried', []),
             'pattern_insights': [],
             'network_analysis': self._analyze_network_indicators(context),
@@ -368,6 +371,12 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
 
     def _generate_markdown_report(self, report_data: Dict[str, Any], context) -> str:
         """Generate markdown formatted report"""
+        llm_used = bool(context.risk_assessment.get('llm_analysis'))
+        base_weight, intel_weight, pattern_weight = (0.2, 0.35, 0.15) if llm_used else (0.3, 0.5, 0.2)
+        base_risk = context.risk_assessment.get('base_risk', 0.0)
+        intel_risk = context.risk_assessment.get('intel_risk', 0.0)
+        pattern_risk = context.risk_assessment.get('pattern_risk', 0.0)
+
         template_vars = {
             'event_id': context.event_id,
             'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'),
@@ -381,9 +390,19 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
             'event_details': self._format_event_details(context.event_data),
             'threat_intelligence_summary': self._format_threat_intelligence_summary(context.intelligence_data),
             'intelligence_sources': self._format_intelligence_sources(report_data['threat_intelligence']),
-            'base_risk': context.risk_assessment.get('base_risk', 0.0),
-            'intel_risk': context.risk_assessment.get('intel_risk', 0.0),
-            'pattern_risk': context.risk_assessment.get('pattern_risk', 0.0),
+            'base_risk': base_risk,
+            'intel_risk': intel_risk,
+            'pattern_risk': pattern_risk,
+            'llm_used': llm_used,
+            'llm_risk': context.risk_assessment.get('llm_risk', 0.0),
+            'base_weight_pct': f"{int(base_weight * 100)}%",
+            'intel_weight_pct': f"{int(intel_weight * 100)}%",
+            'pattern_weight_pct': f"{int(pattern_weight * 100)}%",
+            'llm_weight_pct': '30%',
+            'base_contribution': round(base_risk * base_weight, 3),
+            'intel_contribution': round(intel_risk * intel_weight, 3),
+            'pattern_contribution': round(pattern_risk * pattern_weight, 3),
+            'llm_contribution': round(context.risk_assessment.get('llm_risk', 0.0) * 0.3, 3),
             'confidence': round(context.risk_assessment.get('confidence', 0.0) * 100, 1),
             'risk_explanation': self._generate_risk_explanation(context),
             'recommended_actions': report_data['recommended_actions'],
@@ -446,7 +465,6 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
         """Identify factors contributing to risk"""
         factors = []
 
-        context.risk_assessment.get('risk_score', 0)
         intel_score = context.intelligence_data.get('reputation_score', 0)
 
         if intel_score > 0.5:
@@ -581,7 +599,6 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
     def _generate_risk_explanation(self, context) -> str:
         """Generate human-readable risk explanation"""
         risk_level = context.risk_assessment.get('risk_level', 'unknown')
-        context.risk_assessment.get('risk_score', 0)
 
         explanations = {
             'low': "The event shows minimal indicators of malicious activity and poses low risk to the organization.",
@@ -623,7 +640,7 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
 
     def _generate_error_report(self, context, error: Exception) -> Dict[str, Any]:
         """Generate minimal error report when main report generation fails"""
-        return {
+        report = {
             'metadata': {
                 'event_id': getattr(context, 'event_id', 'unknown'),
                 'status': 'ERROR',
@@ -638,3 +655,8 @@ The investigation determined that this event {risk_descriptions.get(risk_level, 
                 'estimated_effort': '30 minutes'
             }]
         }
+        report['formats'] = {
+            'markdown': f"# Investigation Report Error\n\nReport generation failed: {error}\n",
+            'json': json.dumps(report, indent=2, default=str)
+        }
+        return report

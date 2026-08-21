@@ -1,7 +1,7 @@
 """
 Unit tests for ThreatSentinel SOC Agent
 
-This package contains comprehensive unit tests for all components
+This package contains unit tests for all components
 of the ThreatSentinel autonomous security agent.
 """
 

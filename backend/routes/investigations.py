@@ -6,6 +6,7 @@ API routes for managing security incident investigations.
 
 import logging
 from datetime import datetime, timedelta
+import time
 from typing import Dict, List, Optional, Any
 
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, status
@@ -19,29 +20,18 @@ from ..models import (
     SearchRequest,
     SearchResponse
 )
-from ...agent import SOCAgentPlanner
+from agent import SOCAgentPlanner
+from backend.deps import get_current_user, get_soc_agent
 
 
 # Create router
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)], )
 
 # Global storage for investigations (in production, use proper database)
 active_investigations: Dict[str, Any] = {}
 investigation_history: List[Dict[str, Any]] = []
 
 logger = logging.getLogger(__name__)
-
-
-def get_soc_agent() -> SOCAgentPlanner:
-    """Dependency to get SOC agent instance"""
-    # This would be injected from main.py in practice
-    from ..main import soc_agent
-    if soc_agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SOC Agent not initialized"
-        )
-    return soc_agent
 
 
 @router.post("/", response_model=InvestigationResponse, status_code=status.HTTP_201_CREATED)
@@ -408,6 +398,7 @@ async def search_investigations(request: SearchRequest):
         paginated_results = filtered_results[start_idx:end_idx]
 
         # Format results for response
+        search_started = time.perf_counter()
         formatted_results = []
         for inv in paginated_results:
             formatted_results.append({
@@ -422,7 +413,7 @@ async def search_investigations(request: SearchRequest):
         return SearchResponse(
             total_results=total_results,
             results=formatted_results,
-            query_time_ms=50.0,  # Mock query time
+            query_time_ms=(time.perf_counter() - search_started) * 1000,
             has_more=end_idx < total_results
         )
 
@@ -506,12 +497,12 @@ async def run_investigation_task(investigation_id: str, event_data: Dict[str, An
         logger.info(f"Starting investigation {investigation_id}")
 
         # Get SOC agent
-        from ..main import soc_agent
-        if soc_agent is None:
+        from backend import deps
+        if deps.soc_agent is None:
             raise Exception("SOC Agent not available")
 
         # Run the investigation
-        result = await soc_agent.investigate_incident(event_data, emergency_mode)
+        result = await deps.soc_agent.investigate_incident(event_data, emergency_mode, investigation_id=investigation_id)
 
         # Update with results
         investigation.update({
