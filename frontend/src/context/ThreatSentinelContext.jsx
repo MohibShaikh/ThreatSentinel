@@ -4,7 +4,8 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 
 // API base configuration
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const API_TOKEN = import.meta.env.VITE_API_TOKEN || 'dev-secret-key';
 
 // Create axios instance with default config
 const api = axios.create({
@@ -12,6 +13,7 @@ const api = axios.create({
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
+    'Authorization': `Bearer ${API_TOKEN}`,
   },
 });
 
@@ -68,11 +70,12 @@ export function ThreatSentinelProvider({ children }) {
   const [state, dispatch] = useReducer(threatSentinelReducer, initialState);
   const queryClient = useQueryClient();
 
-  // System health check
+  // System health check (health lives at the API root, not under /api/v1)
   const { data: healthData } = useQuery(
     'systemHealth',
     async () => {
-      const response = await api.get('/health');
+      const root = API_BASE.replace(/\/api\/v1$/, '');
+      const response = await api.get(`${root}/health`);
       return response.data;
     },
     {

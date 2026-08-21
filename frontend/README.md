@@ -1,188 +1,105 @@
-# ThreatSentinel Frontend
+# ThreatSentinel frontend
 
-A sophisticated React-based frontend for the ThreatSentinel SOC Agent, designed specifically for security operations center analysts.
+React frontend for the ThreatSentinel SOC agent. Built for security analysts who live in it all day.
 
 ## Features
 
-### 🎯 **Analyst-Focused Design**
-- **Dark Theme**: Optimized for long hours of security monitoring
-- **Real-time Updates**: Live data streaming and automatic refresh
-- **Responsive Layout**: Works seamlessly on desktop, tablet, and mobile
-- **Accessibility**: WCAG compliant with keyboard navigation support
+Dark theme tuned for long monitoring sessions. Live metrics over WebSockets with automatic refresh. Responsive layout for desktop, tablet, and mobile. Keyboard navigation throughout.
 
-### 📊 **Dashboard & Analytics**
-- **Real-time Metrics**: Live threat activity, system health, and performance indicators
-- **Interactive Charts**: Threat activity visualization with Recharts
-- **Quick Actions**: One-click access to common SOC tasks
-- **System Status**: Real-time monitoring of agent health and performance
+The dashboard shows threat activity, system health, and performance indicators, with Recharts for the charts. Investigations can be created from forms, filtered by status, risk level, or event type, and inspected in a timeline view. The monitoring page tracks system metrics and alert history. The integrations page manages connections to firewalls, SIEMs, and other tools, including direct action execution. A task queue view covers priority-based background work, and audit pages expose action logs for compliance.
 
-### 🔍 **Investigation Management**
-- **Investigation Creation**: Intuitive forms with event type selection
-- **Advanced Filtering**: Search by status, risk level, event type, and more
-- **Bulk Operations**: Multi-select actions for efficiency
-- **Timeline View**: Chronological investigation tracking
+## Technology stack
 
-### 📈 **Monitoring & Alerts**
-- **Real-time Monitoring**: Live system metrics and performance data
-- **Alert Management**: Centralized alert viewing and management
-- **WebSocket Integration**: Real-time data streaming
-- **Historical Data**: Trend analysis and performance tracking
+- React 18 with hooks and functional components
+- React Router for client-side routing
+- React Query for server state and caching
+- Tailwind CSS with a custom dark theme
+- Recharts for data visualization
+- Lucide React for icons
+- React Hook Form for forms and validation
+- React Hot Toast for notifications
+- Axios for HTTP
 
-### 🔧 **Integration Management**
-- **SOC Tool Integration**: Manage connections to firewalls, SIEMs, and more
-- **Action Execution**: Direct control over security tool actions
-- **Health Monitoring**: Integration status and performance tracking
-- **Configuration Management**: Easy setup and maintenance
+## Quick start
 
-### 📋 **Task & Audit Management**
-- **Task Queue**: Priority-based task management with status tracking
-- **Audit Trails**: Comprehensive logging and compliance reporting
-- **Performance Analytics**: Component performance and system health metrics
-- **Export Capabilities**: Data export for compliance and reporting
+You need Node.js 16+ and npm, plus the ThreatSentinel backend running on `http://localhost:8000`.
 
-## Technology Stack
+```bash
+cd frontend
+npm install
+npm start
+```
 
-- **React 18**: Modern React with hooks and functional components
-- **React Router**: Client-side routing and navigation
-- **React Query**: Server state management and caching
-- **Tailwind CSS**: Utility-first CSS framework with custom dark theme
-- **Recharts**: Interactive charts and data visualization
-- **Lucide React**: Beautiful, customizable icons
-- **React Hook Form**: Performant forms with validation
-- **React Hot Toast**: Elegant notifications
-- **Axios**: HTTP client for API communication
+Then open `http://localhost:3000`.
 
-## Quick Start
-
-### Prerequisites
-- Node.js 16+ and npm
-- ThreatSentinel backend running on `http://localhost:8000`
-
-### Installation
-
-1. **Navigate to the frontend directory:**
-   ```bash
-   cd frontend
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Start the development server:**
-   ```bash
-   npm start
-   ```
-
-4. **Open your browser:**
-   Navigate to `http://localhost:3000`
-
-### Environment Configuration
+### Environment configuration
 
 Create a `.env` file in the frontend directory:
 
 ```env
-REACT_APP_API_URL=http://localhost:8000
-REACT_APP_WS_URL=ws://localhost:8000
+VITE_API_URL=http://localhost:8000
 ```
 
-## Project Structure
+## Project structure
 
 ```
 frontend/
 ├── public/                 # Static assets
 ├── src/
 │   ├── components/         # Reusable UI components
-│   │   ├── Dashboard/     # Dashboard-specific components
-│   │   ├── Investigations/# Investigation management
-│   │   ├── Layout/        # Layout and navigation
-│   │   └── Common/        # Shared components
-│   ├── pages/             # Page components
-│   ├── context/           # React context providers
-│   ├── hooks/             # Custom React hooks
-│   ├── utils/             # Utility functions
-│   └── styles/            # Global styles and themes
+│   │   ├── Dashboard/      # Dashboard-specific components
+│   │   ├── Investigations/ # Investigation management
+│   │   ├── Layout/         # Layout and navigation
+│   │   └── Common/         # Shared components
+│   ├── pages/              # Page components
+│   ├── context/            # React context providers
+│   ├── hooks/              # Custom React hooks
+│   ├── utils/              # Utility functions
+│   └── styles/             # Global styles and themes
 ├── package.json
-└── tailwind.config.js     # Tailwind configuration
+└── tailwind.config.js      # Tailwind configuration
 ```
 
-## Key Components
+## Key components
 
-### Dashboard Components
-- **MetricCard**: Displays key performance indicators
-- **ThreatActivityChart**: Real-time threat visualization
-- **QuickActions**: Common SOC task shortcuts
-- **SystemStatus**: Real-time system health monitoring
-- **RecentInvestigations**: Latest investigation overview
+Dashboard: MetricCard, ThreatActivityChart, QuickActions, SystemStatus, RecentInvestigations.
 
-### Investigation Components
-- **InvestigationForm**: Create new investigations
-- **InvestigationTable**: Manage investigation list
-- **InvestigationDetail**: Detailed investigation view
-- **InvestigationTimeline**: Chronological event tracking
+Investigations: InvestigationForm, InvestigationTable, InvestigationDetail, InvestigationTimeline.
 
-### Layout Components
-- **Layout**: Main application layout with sidebar
-- **Navigation**: Sidebar navigation with status indicators
-- **Header**: Top navigation with quick actions
+Layout: Layout (main shell with sidebar), Navigation, Header.
 
-## API Integration
+## API integration
 
-The frontend integrates with the ThreatSentinel backend API through:
-
-- **REST API**: Standard HTTP endpoints for CRUD operations
-- **WebSockets**: Real-time data streaming for live updates
-- **React Query**: Intelligent caching and state management
-- **Error Handling**: Comprehensive error handling and user feedback
+The frontend talks to the backend over REST for CRUD operations and WebSockets for live updates. React Query handles caching; errors surface as toasts with retry feedback.
 
 ## Development
 
-### Available Scripts
+Available scripts:
 
-- `npm start`: Start development server
-- `npm build`: Build for production
-- `npm test`: Run test suite
-- `npm eject`: Eject from Create React App
+- `npm start`: development server
+- `npm run build`: production build
+- `npm test`: test suite
+- `npm eject`: eject from Create React App
 
-### Code Style
-
-- **ESLint**: Code linting and formatting
-- **Prettier**: Code formatting
-- **TypeScript**: Type safety (optional)
-
-### Testing
-
-- **Jest**: Unit testing framework
-- **React Testing Library**: Component testing
-- **Mock Service Worker**: API mocking
+ESLint and Prettier handle linting and formatting. Jest and React Testing Library cover tests.
 
 ## Deployment
 
-### Production Build
+Production build:
 
-1. **Build the application:**
-   ```bash
-   npm run build
-   ```
-
-2. **Serve the build folder:**
-   ```bash
-   npx serve -s build
-   ```
-
-### Docker Deployment
-
-```dockerfile
-FROM node:16-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-RUN npm run build
-EXPOSE 3000
-CMD ["npm", "start"]
+```bash
+npm run build
+npx serve -s build
 ```
+
+Docker (multi-stage build, served by nginx as an unprivileged container):
+
+```bash
+docker build -t threatsentinel-frontend .
+docker run -p 3000:8080 threatsentinel-frontend
+```
+
+Pass `--build-arg VITE_API_URL=...` to point the dashboard at a backend other than `http://localhost:8000`.
 
 ## Contributing
 
@@ -194,11 +111,8 @@ CMD ["npm", "start"]
 
 ## Support
 
-For support and questions:
-- Check the main ThreatSentinel documentation
-- Review the API documentation
-- Open an issue on GitHub
+Check the main ThreatSentinel documentation, review the API docs, or open an issue on GitHub.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT. See the LICENSE file for details.

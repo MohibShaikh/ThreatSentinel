@@ -28,7 +28,7 @@ const Investigations = () => {
     'investigations',
     async () => {
       const response = await api.get('/investigations/');
-      return response.data;
+      return response.data.investigations || [];
     },
     {
       refetchInterval: 30000, // Refresh every 30 seconds
