@@ -96,3 +96,6 @@ docs/_build/
 # Backup files
 *.bak
 *.backup 
+# Node
+node_modules/
+
