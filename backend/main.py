@@ -6,6 +6,8 @@ including incident investigation, report retrieval, and real-time monitoring.
 """
 
 import logging
+import json
+import os
 from datetime import datetime
 from typing import Dict, Optional, Any
 from contextlib import asynccontextmanager
@@ -13,10 +15,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
 from .config import get_settings
+from . import deps
+from .deps import get_current_user, get_soc_agent
 from .models import (
     InvestigationRequest,
     InvestigationResponse,
@@ -29,18 +32,12 @@ from agent import SOCAgentPlanner
 
 
 # Global agent instance
-soc_agent: Optional[SOCAgentPlanner] = None
 active_investigations: Dict[str, Any] = {}
-
-# Security
-security = HTTPBearer(auto_error=False)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup/shutdown"""
-    global soc_agent
-
     # Startup
     settings = get_settings()
 
@@ -55,6 +52,11 @@ async def lifespan(app: FastAPI):
                 'temperature': settings.llm_temperature,
                 'max_tokens': settings.llm_max_tokens,
             }
+
+        try:
+            integrations_config = json.loads(settings.integrations_config)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid INTEGRATIONS_CONFIG JSON: {e}") from e
 
         agent_config = {
             'api_keys': {
@@ -71,12 +73,16 @@ async def lifespan(app: FastAPI):
                 'auto_save': True
             },
             'llm': llm_config,
+            'integrations_config': integrations_config,
+            'audit': {
+                'db_path': os.path.join(settings.data_dir, 'action_logs.db')
+            },
             'confidence_threshold': settings.confidence_threshold,
             'emergency_threshold': settings.emergency_threshold,
             'max_investigation_time': settings.max_investigation_time
         }
 
-        soc_agent = SOCAgentPlanner(agent_config)
+        deps.soc_agent = SOCAgentPlanner(agent_config)
         logging.info("SOC Agent initialized successfully")
 
     except Exception as e:
@@ -102,54 +108,18 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=get_settings().cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Dependency to get SOC agent
-def get_soc_agent() -> SOCAgentPlanner:
-    """Dependency to get the SOC agent instance"""
-    if soc_agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SOC Agent not initialized"
-        )
-    return soc_agent
-
-
-# Authentication dependency
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Bearer token authentication using the configured secret key."""
-    settings = get_settings()
-
-    if credentials is None:
-        if settings.debug:
-            return {"user_id": "debug_user", "role": "admin"}
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    import hmac
-    expected = settings.secret_key
-    if not hmac.compare_digest(credentials.credentials, expected):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return {"user_id": "api_user", "role": "admin"}
-
-
 # Include routers
 app.include_router(investigations.router, prefix="/api/v1/investigations", tags=["Investigations"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(monitoring.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
+app.include_router(monitoring.ws_router, prefix="/api/v1/monitoring")
 app.include_router(integrations.router, prefix="/api/v1/integrations", tags=["Integrations"])
 app.include_router(tasks.router, prefix="/api/v1", tags=["Tasks"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
@@ -315,7 +285,7 @@ async def get_investigation_result(investigation_id: str):
 
 async def run_investigation(investigation_id: str, event_data: Dict[str, Any], emergency_mode: bool = False):
     """Background task to run the investigation"""
-    global soc_agent, active_investigations
+    global active_investigations
 
     try:
         # Update status
@@ -323,7 +293,7 @@ async def run_investigation(investigation_id: str, event_data: Dict[str, Any], e
         active_investigations[investigation_id]['current_phase'] = 'initial_assessment'
 
         # Run investigation
-        result = await soc_agent.investigate_incident(event_data, emergency_mode)
+        result = await deps.soc_agent.investigate_incident(event_data, emergency_mode, investigation_id=investigation_id)
 
         # Update with results
         active_investigations[investigation_id].update({

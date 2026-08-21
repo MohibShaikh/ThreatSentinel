@@ -12,12 +12,13 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.deps import get_current_user
 from agent.action_logger import ActionLog, ActionLogger
 
-router = APIRouter(prefix="/audit", tags=["audit"])
+router = APIRouter(dependencies=[Depends(get_current_user)], prefix="/audit", tags=["audit"])
 
 # Pydantic models for responses
 class ActionLogResponse(BaseModel):
@@ -81,7 +82,8 @@ def get_action_logger() -> ActionLogger:
     """Get or create the global action logger instance."""
     global action_logger
     if action_logger is None:
-        action_logger = ActionLogger()
+        from backend.deps import get_soc_agent
+        action_logger = get_soc_agent().action_logger
     return action_logger
 
 @router.get("/investigations/{investigation_id}/logs", response_model=List[ActionLogResponse])
@@ -123,8 +125,8 @@ async def get_investigation_timeline(investigation_id: str):
     if not timeline:
         raise HTTPException(status_code=404, detail="No timeline found for this investigation")
 
-    start_time = logs[0].timestamp if logs else datetime.now()
-    end_time = logs[-1].timestamp if logs else datetime.now()
+    start_time = logs[0].timestamp if logs else datetime.utcnow()
+    end_time = logs[-1].timestamp if logs else datetime.utcnow()
     duration = (end_time - start_time).total_seconds()
 
     return InvestigationTimelineResponse(
@@ -185,7 +187,7 @@ async def search_action_logs(
 
     # Build query - this is a simplified version
     # In a real implementation, you'd add proper filtering to the ActionLogger class
-    since = datetime.now() - timedelta(hours=since_hours)
+    since = datetime.utcnow() - timedelta(hours=since_hours)
 
     query = """
         SELECT * FROM action_logs
@@ -260,7 +262,7 @@ async def list_active_components():
     """List all components that have logged actions recently."""
     logger = get_action_logger()
 
-    since = datetime.now() - timedelta(hours=24)
+    since = datetime.utcnow() - timedelta(hours=24)
 
     try:
         with sqlite3.connect(logger.db_path) as conn:
@@ -310,7 +312,7 @@ async def get_audit_overview():
             total_actions = cursor.fetchone()[0]
 
             # Recent activity (last 24 hours)
-            since = datetime.now() - timedelta(hours=24)
+            since = datetime.utcnow() - timedelta(hours=24)
             cursor = conn.execute("""
                 SELECT COUNT(*) FROM action_logs
                 WHERE timestamp > ?

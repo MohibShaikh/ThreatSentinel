@@ -9,15 +9,16 @@ Provides endpoints for:
 """
 
 from typing import Dict, Optional
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from ..main import get_soc_agent
+from backend.deps import get_current_user, get_soc_agent
 from agent.task_queue import TaskQueue, TaskPriority
 from agent.planner import SOCAgentPlanner
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(dependencies=[Depends(get_current_user)], prefix="/tasks", tags=["tasks"])
 
 # Pydantic models for request/response
 class TaskCreateRequest(BaseModel):
@@ -60,8 +61,27 @@ def get_task_queue() -> TaskQueue:
 
         # Register investigation handler
         async def investigation_handler(payload: Dict):
-            from backend.routes.investigations import run_investigation_task
-            return await run_investigation_task(payload)
+            from backend.routes.investigations import run_investigation_task, active_investigations
+
+            event_data = payload.get('event_data', {})
+            emergency_mode = payload.get('emergency_mode', False)
+            investigation_id = f"inv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(event_data)) % 10000}"
+
+            active_investigations[investigation_id] = {
+                'id': investigation_id,
+                'status': 'pending',
+                'created_at': datetime.utcnow(),
+                'request': {'event_data': event_data, 'emergency_mode': emergency_mode},
+                'progress': 0,
+                'current_phase': 'queued'
+            }
+
+            await run_investigation_task(investigation_id, event_data, emergency_mode)
+
+            record = active_investigations[investigation_id]
+            if record['status'] != 'completed':
+                raise Exception(record.get('error', 'Investigation failed'))
+            return record.get('result')
 
         task_queue.register_handler("investigation", investigation_handler)
 

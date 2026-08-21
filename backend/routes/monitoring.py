@@ -7,6 +7,7 @@ API routes for real-time monitoring, metrics, and system health.
 import asyncio
 import logging
 import psutil
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
 
@@ -17,11 +18,12 @@ from ..models import (
     AlertConfiguration,
     EventSubscription
 )
-from ...agent import SOCAgentPlanner
+from agent import SOCAgentPlanner
+from backend.deps import get_current_user, get_soc_agent
 
 
 # Create router
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)], )
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +32,6 @@ metrics_history: List[Dict[str, Any]] = []
 active_websockets: List[WebSocket] = []
 alert_config = AlertConfiguration()
 subscriptions: Dict[str, EventSubscription] = {}
-
-
-def get_soc_agent() -> SOCAgentPlanner:
-    """Dependency to get SOC agent instance"""
-    from ..main import soc_agent
-    if soc_agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SOC Agent not initialized"
-        )
-    return soc_agent
 
 
 @router.get("/metrics", response_model=MonitoringMetrics)
@@ -90,19 +81,15 @@ async def get_current_metrics(agent: SOCAgentPlanner = Depends(get_soc_agent)):
         # Get memory stats
         await agent.memory.get_memory_stats()
 
-        # Get API call statistics (mock for now)
-        threat_intel_calls = {
-            'virustotal': 45,
-            'abuseipdb': 32,
-            'urlvoid': 18,
-            'shodan': 12
-        }
+        failed_today = len([
+            inv for inv in today_investigations
+            if inv.get('status') == 'failed'
+        ])
+        finished_today = completed_today + failed_today
+        error_rate = (failed_today / finished_today * 100) if finished_today else 0.0
 
         # System metrics
         memory_usage = psutil.virtual_memory().used / (1024 * 1024)  # MB
-
-        # Mock error rate (would be calculated from actual errors)
-        error_rate = 2.1  # percentage
 
         metrics = MonitoringMetrics(
             timestamp=datetime.utcnow(),
@@ -110,14 +97,16 @@ async def get_current_metrics(agent: SOCAgentPlanner = Depends(get_soc_agent)):
             completed_investigations_today=completed_today,
             average_investigation_time=avg_time,
             high_risk_events_today=high_risk_today,
-            api_response_time=150.0,  # Mock value
+            api_response_time=None,
             memory_usage_mb=memory_usage,
-            threat_intel_api_calls=threat_intel_calls,
+            threat_intel_api_calls={},
             error_rate=error_rate
         )
 
         # Store in history (keep last 1000 entries)
-        metrics_history.append(metrics.dict())
+        entry = metrics.dict()
+        entry['timestamp'] = entry['timestamp'].isoformat()
+        metrics_history.append(entry)
         if len(metrics_history) > 1000:
             metrics_history.pop(0)
 
@@ -192,13 +181,27 @@ async def get_metrics_history(
         )
 
 
-@router.websocket("/metrics/stream")
-async def metrics_websocket(websocket: WebSocket):
+# Separate router for websockets: router-level HTTP auth dependencies
+# cannot run during a websocket handshake, so this one authenticates itself
+ws_router = APIRouter()
+
+
+@ws_router.websocket("/metrics/stream")
+async def metrics_websocket(websocket: WebSocket, token: str = Query("")):
     """
     WebSocket endpoint for real-time metrics streaming
 
     Provides live updates of system metrics for dashboards.
+    Requires the API token as a `token` query parameter.
     """
+    import hmac
+    from backend.config import get_settings
+
+    settings = get_settings()
+    if not token or not hmac.compare_digest(token, settings.secret_key):
+        await websocket.close(code=4401)
+        return
+
     await websocket.accept()
     active_websockets.append(websocket)
 
@@ -316,9 +319,8 @@ async def create_subscription(subscription: EventSubscription):
     Subscribe to real-time notifications for specific event types or risk levels.
     """
     try:
-        # Generate subscription ID if not provided
-        if not hasattr(subscription, 'subscription_id') or not subscription.subscription_id:
-            subscription.subscription_id = f"sub_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        if not subscription.subscription_id:
+            subscription.subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
 
         subscriptions[subscription.subscription_id] = subscription
 
@@ -375,11 +377,12 @@ async def get_system_status(agent: SOCAgentPlanner = Depends(get_soc_agent)):
     """
     Get detailed system status information
 
-    Returns comprehensive system health and performance data.
+    Returns system health and performance data.
     """
     try:
-        # System resource information
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # System resource information; cpu_percent(interval=1) blocks for a
+        # full second, so run it in a worker thread instead of the event loop
+        cpu_percent = await asyncio.to_thread(psutil.cpu_percent, 1)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
 

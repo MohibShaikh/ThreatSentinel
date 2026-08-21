@@ -4,9 +4,20 @@ SIEM Integration Adapters
 
 import asyncio
 import base64
+import re
 import aiohttp
 from typing import Dict, Any, List
 from .base import BaseIntegration, ActionResult, ActionType, IntegrationType
+
+_SAFE_INDICATOR = re.compile(r'^[A-Za-z0-9.\-_:]+$')
+
+
+def _sanitize_indicator(value: str) -> str:
+    """Allow only plain indicators so nothing can break out of SPL/KQL strings"""
+    value = value.strip()
+    if not _SAFE_INDICATOR.fullmatch(value):
+        raise ValueError(f"Unsafe indicator for SIEM query: {value!r}")
+    return value
 
 
 class SplunkIntegration(BaseIntegration):
@@ -216,7 +227,7 @@ class SplunkIntegration(BaseIntegration):
 
         search_data = {
             "name": search_name,
-            "search": context.get("search_query", f'search index={self.index} "{context.get("target", "")}"'),
+            "search": context.get("search_query", f'search index={self.index} "{_sanitize_indicator(context.get("target", ""))}"'),
             "description": f"Created by ThreatSentinel SOC Agent - {context.get('description', '')}",
             "is_scheduled": context.get("schedule", False),
             "cron_schedule": context.get("cron", "0 */1 * * *"),  # Every hour by default
@@ -584,7 +595,7 @@ class SentinelIntegration(BaseIntegration):
                 "description": f"Created by ThreatSentinel SOC Agent - {context.get('description', '')}",
                 "severity": context.get("severity", "Medium"),
                 "enabled": True,
-                "query": context.get("kql_query", f"SecurityEvent | where Computer contains '{context.get('target', '')}'"),
+                "query": context.get("kql_query", f"SecurityEvent | where Computer contains '{_sanitize_indicator(context.get('target', ''))}'"),
                 "queryFrequency": "PT1H",
                 "queryPeriod": "PT1H",
                 "triggerOperator": "GreaterThan",

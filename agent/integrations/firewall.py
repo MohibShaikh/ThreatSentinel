@@ -3,8 +3,38 @@ Firewall Integration Adapters
 """
 
 import asyncio
+import ipaddress
+import re
 from typing import Dict, Any, List
+from xml.sax.saxutils import escape, quoteattr
 from .base import BaseIntegration, ActionResult, ActionType, IntegrationType
+
+_DOMAIN_RE = re.compile(
+    r'^[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?'
+    r'(\.[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?)+$'
+)
+_URL_ENTRY_RE = re.compile(r'^[A-Za-z0-9.\-*/:?=&]+$')
+_RULE_NAME_RE = re.compile(r'^[\w\- ]+$')
+_ALLOWED_RULE_ACTIONS = {'deny', 'allow', 'drop', 'reset'}
+
+
+def _validate_ip(value: str) -> str:
+    """Reject anything that is not a plain IP before it reaches firewall config"""
+    return str(ipaddress.ip_address(value.strip()))
+
+
+def _validate_domain(value: str) -> str:
+    value = value.strip().lower()
+    if not _DOMAIN_RE.fullmatch(value):
+        raise ValueError(f"Unsafe domain for firewall rule: {value!r}")
+    return value
+
+
+def _validate_url_entry(value: str) -> str:
+    value = re.sub(r'^https?://', '', value.strip(), flags=re.IGNORECASE)
+    if not _URL_ENTRY_RE.fullmatch(value):
+        raise ValueError(f"Unsafe URL entry for firewall rule: {value!r}")
+    return value
 
 
 class PaloAltoIntegration(BaseIntegration):
@@ -111,24 +141,14 @@ class PaloAltoIntegration(BaseIntegration):
         """Block IP address by adding to address group"""
         url = f"https://{self.hostname}:{self.port}/api/"
 
-        # Create address object
-        address_name = f"blocked_ip_{ip.replace('.', '_')}"
-        f"""
-        <set>
-            <address>
-                <entry name="{address_name}">
-                    <ip-netmask>{ip}</ip-netmask>
-                    <description>Blocked by ThreatSentinel SOC Agent - {context.get('reason', 'Security threat')}</description>
-                </entry>
-            </address>
-        </set>
-        """
+        ip = _validate_ip(ip)
+        address_name = f"blocked_ip_{ip.replace('.', '_').replace(':', '_')}"
 
         params = {
             "type": "config",
             "action": "set",
             "xpath": f"/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='{self.vsys}']/address",
-            "element": f"<entry name='{address_name}'><ip-netmask>{ip}</ip-netmask></entry>",
+            "element": f"<entry name={quoteattr(address_name)}><ip-netmask>{escape(ip)}</ip-netmask></entry>",
             "key": self.api_key
         }
 
@@ -149,11 +169,13 @@ class PaloAltoIntegration(BaseIntegration):
         # Add URL to custom category
         api_url = f"https://{self.hostname}:{self.port}/api/"
 
+        url = _validate_url_entry(url)
+
         params = {
             "type": "config",
             "action": "set",
             "xpath": f"/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='{self.vsys}']/profiles/custom-url-category/entry[@name='ThreatSentinel_Blocked_URLs']/list",
-            "element": f"<member>{url}</member>",
+            "element": f"<member>{escape(url)}</member>",
             "key": self.api_key
         }
 
@@ -168,22 +190,33 @@ class PaloAltoIntegration(BaseIntegration):
 
     async def _block_domain(self, domain: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Block domain using DNS security or URL filtering"""
-        return await self._block_url(f"*.{domain}", context)
+        return await self._block_url(f"*.{_validate_domain(domain)}", context)
 
     async def _create_security_rule(self, rule_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Create security rule to block traffic"""
         url = f"https://{self.hostname}:{self.port}/api/"
 
+        rule_name = rule_name.strip()
+        if not _RULE_NAME_RE.fullmatch(rule_name):
+            raise ValueError(f"Unsafe rule name: {rule_name!r}")
+
         source = context.get("source", "any")
         destination = context.get("destination", "any")
         action = context.get("action", "deny")
 
+        if action not in _ALLOWED_RULE_ACTIONS:
+            raise ValueError(f"Unsupported rule action: {action!r}")
+        if source != "any":
+            source = _validate_ip(source)
+        if destination != "any":
+            destination = _validate_ip(destination)
+
         rule_xml = f"""
-        <entry name="{rule_name}">
+        <entry name={quoteattr(rule_name)}>
             <from><member>any</member></from>
             <to><member>any</member></to>
-            <source><member>{source}</member></source>
-            <destination><member>{destination}</member></destination>
+            <source><member>{escape(source)}</member></source>
+            <destination><member>{escape(destination)}</member></destination>
             <service><member>any</member></service>
             <application><member>any</member></application>
             <action>{action}</action>
@@ -320,7 +353,8 @@ class FortinetIntegration(BaseIntegration):
     async def _block_ip(self, ip: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Block IP by adding to address object and policy"""
         # Create address object
-        address_name = f"ThreatSentinel_Blocked_{ip.replace('.', '_')}"
+        ip = _validate_ip(ip)
+        address_name = f"ThreatSentinel_Blocked_{ip.replace('.', '_').replace(':', '_')}"
         url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/firewall/address"
 
         address_data = {
@@ -345,8 +379,10 @@ class FortinetIntegration(BaseIntegration):
         # Add to blocked URLs in web filter profile
         api_url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/webfilter/urlfilter"
 
+        url_path = _validate_url_entry(url_path)
+
         url_data = {
-            "name": f"ThreatSentinel_Blocked_URL_{hash(url_path) % 10000}",
+            "name": f"ThreatSentinel_Blocked_URL_{abs(hash(url_path)) % 10000}",
             "entries": [
                 {
                     "url": url_path,
@@ -370,6 +406,13 @@ class FortinetIntegration(BaseIntegration):
         """Create firewall policy"""
         url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/firewall/policy"
 
+        policy_name = policy_name.strip()
+        if not _RULE_NAME_RE.fullmatch(policy_name):
+            raise ValueError(f"Unsafe policy name: {policy_name!r}")
+        action = context.get("action", "deny")
+        if action not in _ALLOWED_RULE_ACTIONS:
+            raise ValueError(f"Unsupported policy action: {action!r}")
+
         policy_data = {
             "name": policy_name,
             "srcintf": [{"name": context.get("source_interface", "any")}],
@@ -377,7 +420,7 @@ class FortinetIntegration(BaseIntegration):
             "srcaddr": [{"name": context.get("source", "all")}],
             "dstaddr": [{"name": context.get("destination", "all")}],
             "service": [{"name": "ALL"}],
-            "action": context.get("action", "deny"),
+            "action": action,
             "status": "enable",
             "comments": "Created by ThreatSentinel SOC Agent"
         }

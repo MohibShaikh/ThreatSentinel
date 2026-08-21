@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     reports_dir: str = Field(default="reports", env="REPORTS_DIR")
     memory_dir: str = Field(default="data/memory", env="MEMORY_DIR")
     logs_dir: str = Field(default="logs", env="LOGS_DIR")
+    auto_save_reports: bool = Field(default=True, env="AUTO_SAVE_REPORTS")
+
+    # Integrations: JSON object of the form {"integrations": {"palo_alto": {...}}}
+    integrations_config: str = Field(default="{}", env="INTEGRATIONS_CONFIG")
 
     # Database (future)
     database_url: Optional[str] = Field(default=None, env="DATABASE_URL")
@@ -69,7 +73,7 @@ class Settings(BaseSettings):
     rate_limit_window: int = Field(default=3600, env="RATE_LIMIT_WINDOW")  # seconds
 
     # CORS
-    cors_origins: list = Field(default=["*"], env="CORS_ORIGINS")
+    cors_origins: list = Field(default=["http://localhost:3000", "http://localhost:8080"], env="CORS_ORIGINS")
 
     # Investigation Limits
     max_concurrent_investigations: int = Field(default=10, env="MAX_CONCURRENT_INVESTIGATIONS")
