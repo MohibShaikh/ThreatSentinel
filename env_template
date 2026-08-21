@@ -44,7 +44,13 @@ RATE_LIMIT_REQUESTS=100
 RATE_LIMIT_WINDOW=3600
 
 # CORS (configure for production)
-CORS_ORIGINS=["*"]
+CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080"]
+
+# Integrations (JSON config for firewalls, SIEMs, communication, incident tools)
+# INTEGRATIONS_CONFIG='{"integrations": {"palo_alto": {"hostname": "fw.company.com", "api_key": "..."}}}'
+
+# Reports
+AUTO_SAVE_REPORTS=true
 
 # Monitoring
 HEALTH_CHECK_INTERVAL=60
