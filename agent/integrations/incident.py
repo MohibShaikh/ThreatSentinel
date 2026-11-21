@@ -2,10 +2,11 @@
 Incident Response Platform Integration Adapters
 """
 
-import asyncio
+import time
 import base64
 from typing import Dict, Any, List
-from .base import BaseIntegration, ActionResult, ActionType, IntegrationType
+from .base import (ActionResult, ActionType, BaseIntegration, IntegrationType, safe_path_segment,
+                   stable_reference)
 
 
 class ServiceNowIntegration(BaseIntegration):
@@ -72,7 +73,7 @@ class ServiceNowIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action in ServiceNow"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.CREATE_INCIDENT:
@@ -84,7 +85,7 @@ class ServiceNowIntegration(BaseIntegration):
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -96,7 +97,7 @@ class ServiceNowIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -154,7 +155,7 @@ class ServiceNowIntegration(BaseIntegration):
 
     async def _update_incident(self, incident_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Update existing incident in ServiceNow"""
-        url = f"{self.instance_url}/api/now/table/incident/{incident_id}"
+        url = f"{self.instance_url}/api/now/table/incident/{safe_path_segment(incident_id, 'incident id')}"
 
         update_data = {}
 
@@ -200,7 +201,7 @@ class ServiceNowIntegration(BaseIntegration):
         if context.get("escalation_group"):
             escalation_data["assignment_group"] = context["escalation_group"]
 
-        url = f"{self.instance_url}/api/now/table/incident/{incident_id}"
+        url = f"{self.instance_url}/api/now/table/incident/{safe_path_segment(incident_id, 'incident id')}"
         await self._make_request("PUT", url, json=escalation_data)
 
         return {
@@ -299,7 +300,7 @@ class JiraIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action in Jira"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.CREATE_INCIDENT:
@@ -311,7 +312,7 @@ class JiraIntegration(BaseIntegration):
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -323,7 +324,7 @@ class JiraIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -390,6 +391,7 @@ class JiraIntegration(BaseIntegration):
 
     async def _update_issue(self, issue_key: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Update existing issue in Jira"""
+        issue_key = safe_path_segment(issue_key, "issue key")
         url = f"{self.server_url}/rest/api/3/issue/{issue_key}"
 
         update_data = {"fields": {}}
@@ -417,6 +419,7 @@ class JiraIntegration(BaseIntegration):
     async def _escalate_issue(self, issue_key: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Escalate issue in Jira"""
         # Update priority to highest
+        issue_key = safe_path_segment(issue_key, "issue key")
         url = f"{self.server_url}/rest/api/3/issue/{issue_key}"
 
         escalation_data = {
@@ -451,7 +454,7 @@ class JiraIntegration(BaseIntegration):
     async def _transition_issue(self, issue_key: str, status: str):
         """Transition issue to new status"""
         # Get available transitions
-        transitions_url = f"{self.server_url}/rest/api/3/issue/{issue_key}/transitions"
+        transitions_url = f"{self.server_url}/rest/api/3/issue/{safe_path_segment(issue_key, 'issue key')}/transitions"
         transitions_response = await self._make_request("GET", transitions_url)
 
         # Find transition ID for the desired status
@@ -469,7 +472,7 @@ class JiraIntegration(BaseIntegration):
 
     async def _add_comment(self, issue_key: str, comment: str):
         """Add comment to issue"""
-        url = f"{self.server_url}/rest/api/3/issue/{issue_key}/comment"
+        url = f"{self.server_url}/rest/api/3/issue/{safe_path_segment(issue_key, 'issue key')}/comment"
 
         comment_data = {
             "body": {
@@ -580,7 +583,7 @@ class PagerDutyIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action in PagerDuty"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.CREATE_INCIDENT:
@@ -592,7 +595,7 @@ class PagerDutyIntegration(BaseIntegration):
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -604,7 +607,7 @@ class PagerDutyIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -685,7 +688,7 @@ class PagerDutyIntegration(BaseIntegration):
         event_data = {
             "routing_key": self.routing_key,
             "event_action": "trigger",
-            "dedup_key": context.get("investigation_id", f"ThreatSentinel_{hash(message) % 10000}"),
+            "dedup_key": context.get("investigation_id") or f"ThreatSentinel_{stable_reference(message)}",
             "payload": {
                 "summary": message,
                 "source": "ThreatSentinel SOC Agent",
@@ -710,7 +713,7 @@ class PagerDutyIntegration(BaseIntegration):
                     error_text = await response.text()
                     raise Exception(f"PagerDuty Events API error {response.status}: {error_text}")
 
-                response_data = await response.json()
+                response_data = await response.json(content_type=None)
 
         return {
             "dedup_key": event_data["dedup_key"],
@@ -722,6 +725,7 @@ class PagerDutyIntegration(BaseIntegration):
 
     async def _escalate_incident(self, incident_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Escalate incident in PagerDuty"""
+        incident_id = safe_path_segment(incident_id, "incident id")
         url = f"{self.api_url}/incidents/{incident_id}"
 
         # Update incident urgency to high

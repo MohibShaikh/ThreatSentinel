@@ -2,22 +2,50 @@
 SIEM Integration Adapters
 """
 
-import asyncio
 import base64
+import csv
+import io
 import re
+import time
+from typing import Any, Dict, List
+
 import aiohttp
-from typing import Dict, Any, List
-from .base import BaseIntegration, ActionResult, ActionType, IntegrationType
+
+from .base import (ActionResult, ActionType, BaseIntegration, IntegrationType, safe_path_segment,
+                   stable_reference)
 
 _SAFE_INDICATOR = re.compile(r'^[A-Za-z0-9.\-_:]+$')
+_RAW_QUERY_KEYS = ("search_query", "kql_query", "rule_logic")
 
 
 def _sanitize_indicator(value: str) -> str:
-    """Allow only plain indicators so nothing can break out of SPL/KQL strings"""
-    value = value.strip()
+    """Allow only plain indicators so nothing can break out of SPL/KQL/AQL strings"""
+    value = str(value or "").strip()
     if not _SAFE_INDICATOR.fullmatch(value):
         raise ValueError(f"Unsafe indicator for SIEM query: {value!r}")
     return value
+
+
+def _reject_raw_query(context: Dict[str, Any]) -> None:
+    """Raw query overrides are code execution in the SIEM; queries are built from indicators only"""
+    for key in _RAW_QUERY_KEYS:
+        if context.get(key):
+            raise ValueError(f"Raw query override '{key}' is not accepted; pass 'target' instead")
+
+
+def _csv_cell(value: Any) -> str:
+    """CSV cell with spreadsheet formula injection neutralized"""
+    text = "" if value is None else str(value)
+    text = text.replace("\r", " ").replace("\n", " ")
+    if text[:1] in ("=", "+", "-", "@", "\t"):
+        text = "'" + text
+    return text
+
+
+def _csv_line(values: List[Any]) -> str:
+    buffer = io.StringIO()
+    csv.writer(buffer, quoting=csv.QUOTE_MINIMAL, lineterminator="\n").writerow([_csv_cell(v) for v in values])
+    return buffer.getvalue()
 
 
 class SplunkIntegration(BaseIntegration):
@@ -85,7 +113,7 @@ class SplunkIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action in Splunk"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.CREATE_INCIDENT:
@@ -99,7 +127,7 @@ class SplunkIntegration(BaseIntegration):
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -111,7 +139,7 @@ class SplunkIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -187,30 +215,29 @@ class SplunkIntegration(BaseIntegration):
         url = f"https://{self.hostname}:{self.port}/services/data/lookup-table-files/ThreatSentinel_watchlist.csv"
 
         watchlist_entry = {
-            "indicator": indicator,
-            "indicator_type": context.get("indicator_type", "unknown"),
-            "threat_level": context.get("threat_level", "medium"),
+            "indicator": _sanitize_indicator(indicator),
+            "indicator_type": context.get("indicator_type") or "unknown",
+            "threat_level": context.get("threat_level") or "medium",
             "added_by": "ThreatSentinel SOC Agent",
-            "added_date": context.get("timestamp"),
-            "investigation_id": context.get("investigation_id"),
-            "description": context.get("description", "")
+            "added_date": context.get("timestamp") or "",
+            "investigation_id": context.get("investigation_id") or "",
+            "description": context.get("description") or ""
         }
 
-        # Convert to CSV format for Splunk lookup
-        csv_line = ",".join([
+        csv_line = _csv_line([
             watchlist_entry["indicator"],
             watchlist_entry["indicator_type"],
             watchlist_entry["threat_level"],
             watchlist_entry["added_by"],
             watchlist_entry["added_date"],
             watchlist_entry["investigation_id"],
-            f'"{watchlist_entry["description"]}"'
+            watchlist_entry["description"],
         ])
 
         try:
             await self._make_request("POST", url, data=csv_line)
-        except Exception:
-            # If lookup doesn't exist, create it first
+        except Exception as e:
+            self.logger.info(f"Watchlist lookup append failed ({type(e).__name__}); creating lookup first")
             await self._create_watchlist_lookup()
             await self._make_request("POST", url, data=csv_line)
 
@@ -218,16 +245,20 @@ class SplunkIntegration(BaseIntegration):
             "indicator": indicator,
             "watchlist": "ThreatSentinel_watchlist",
             "action": "added",
-            "reference_id": f"watchlist_{hash(indicator) % 10000}"
+            "reference_id": f"watchlist_{stable_reference(indicator)}"
         }
 
     async def _create_saved_search(self, search_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Create saved search/alert in Splunk"""
         url = f"https://{self.hostname}:{self.port}/services/saved/searches"
+        _reject_raw_query(context)
+        if not re.fullmatch(r"[\w\- ]{1,100}", search_name or ""):
+            raise ValueError(f"Unsafe saved search name: {search_name!r}")
+        index = safe_path_segment(self.index, "index name")
 
         search_data = {
             "name": search_name,
-            "search": context.get("search_query", f'search index={self.index} "{_sanitize_indicator(context.get("target", ""))}"'),
+            "search": f'search index={index} "{_sanitize_indicator(context.get("target", ""))}"',
             "description": f"Created by ThreatSentinel SOC Agent - {context.get('description', '')}",
             "is_scheduled": context.get("schedule", False),
             "cron_schedule": context.get("cron", "0 */1 * * *"),  # Every hour by default
@@ -316,7 +347,7 @@ class QRadarIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action in QRadar"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.CREATE_INCIDENT:
@@ -328,7 +359,7 @@ class QRadarIntegration(BaseIntegration):
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -340,7 +371,7 @@ class QRadarIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -378,29 +409,32 @@ class QRadarIntegration(BaseIntegration):
     async def _add_to_reference_set(self, indicator: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Add indicator to QRadar reference set"""
         reference_set_name = context.get("reference_set", "ThreatSentinel_Threat_Indicators")
+        encoded_name = safe_path_segment(reference_set_name, "reference set name")
+        indicator = _sanitize_indicator(indicator)
 
-        # First, ensure reference set exists
         try:
             await self._create_reference_set(reference_set_name)
-        except Exception:
-            pass  # May already exist
+        except Exception as e:
+            self.logger.debug(f"Reference set create skipped ({type(e).__name__}); it may already exist")
 
-        # Add value to reference set
-        url = f"https://{self.hostname}/api/reference_data/sets/{reference_set_name}"
-
-        data = {"value": indicator}
-        await self._make_request("POST", url, json=data)
+        url = f"https://{self.hostname}/api/reference_data/sets/{encoded_name}"
+        # QRadar takes the value as a query parameter on this endpoint
+        await self._make_request("POST", url, params={"value": indicator})
 
         return {
             "indicator": indicator,
             "reference_set": reference_set_name,
             "action": "added",
-            "reference_id": f"ref_{hash(indicator) % 10000}"
+            "reference_id": f"ref_{stable_reference(reference_set_name, indicator)}"
         }
 
     async def _create_custom_rule(self, rule_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Create custom rule in QRadar"""
         url = f"https://{self.hostname}/api/analytics/rules"
+        _reject_raw_query(context)
+        if not re.fullmatch(r"[\w\- ]{1,100}", rule_name or ""):
+            raise ValueError(f"Unsafe rule name: {rule_name!r}")
+        indicator = _sanitize_indicator(context.get("target", ""))
 
         rule_data = {
             "name": rule_name,
@@ -409,7 +443,7 @@ class QRadarIntegration(BaseIntegration):
             "owner": "ThreatSentinel SOC Agent",
             "tests": [
                 {
-                    "text": context.get("rule_logic", f"SELECT * WHERE sourceip = '{context.get('target', '')}'"),
+                    "text": f"when the event matches sourceip = '{indicator}'",
                     "uid": 1
                 }
             ]
@@ -434,7 +468,7 @@ class QRadarIntegration(BaseIntegration):
             "timeout_type": "UNKNOWN"
         }
 
-        return await self._make_request("POST", url, json=ref_set_data)
+        return await self._make_request("POST", url, params=ref_set_data)
 
 
 class SentinelIntegration(BaseIntegration):
@@ -467,8 +501,7 @@ class SentinelIntegration(BaseIntegration):
             })
 
             # Test connection
-            url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.OperationalInsights/workspaces/{self.workspace_name}"
-            await self._make_request("GET", url, params={"api-version": "2020-08-01"})
+            await self._make_request("GET", self._workspace_url(), params={"api-version": "2020-08-01"})
 
             self.is_connected = True
             self.logger.info("Connected to Azure Sentinel")
@@ -502,7 +535,7 @@ class SentinelIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action in Azure Sentinel"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.CREATE_INCIDENT:
@@ -514,7 +547,7 @@ class SentinelIntegration(BaseIntegration):
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -526,7 +559,7 @@ class SentinelIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -540,7 +573,7 @@ class SentinelIntegration(BaseIntegration):
 
     async def _get_access_token(self) -> str:
         """Get Azure AD access token"""
-        url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+        url = f"https://login.microsoftonline.com/{safe_path_segment(self.tenant_id, 'tenant id')}/oauth2/v2.0/token"
 
         data = {
             "client_id": self.client_id,
@@ -549,14 +582,23 @@ class SentinelIntegration(BaseIntegration):
             "grant_type": "client_credentials"
         }
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(url, data=data) as response:
-                token_data = await response.json()
+                if response.status != 200:
+                    raise Exception(f"Azure AD token request failed: HTTP {response.status}")
+                token_data = await response.json(content_type=None)
                 return token_data["access_token"]
+
+    def _workspace_url(self) -> str:
+        return (f"https://management.azure.com/subscriptions/{safe_path_segment(self.subscription_id, 'subscription id')}"
+                f"/resourceGroups/{safe_path_segment(self.resource_group, 'resource group')}"
+                f"/providers/Microsoft.OperationalInsights/workspaces/"
+                f"{safe_path_segment(self.workspace_name, 'workspace name')}")
 
     async def _create_incident(self, title: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Create incident in Azure Sentinel"""
-        url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.OperationalInsights/workspaces/{self.workspace_name}/providers/Microsoft.SecurityInsights/incidents/{title.replace(' ', '_')}"
+        incident_id = f"threatsentinel-{stable_reference(title, context.get('investigation_id', ''), length=16)}"
+        url = f"{self._workspace_url()}/providers/Microsoft.SecurityInsights/incidents/{incident_id}"
 
         incident_data = {
             "properties": {
@@ -586,7 +628,9 @@ class SentinelIntegration(BaseIntegration):
 
     async def _create_analytics_rule(self, rule_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Create analytics rule in Azure Sentinel"""
-        url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.OperationalInsights/workspaces/{self.workspace_name}/providers/Microsoft.SecurityInsights/alertRules/{rule_name.replace(' ', '_')}"
+        _reject_raw_query(context)
+        rule_id = safe_path_segment(re.sub(r"\s+", "_", str(rule_name or "").strip()), "rule name")
+        url = f"{self._workspace_url()}/providers/Microsoft.SecurityInsights/alertRules/{rule_id}"
 
         rule_data = {
             "kind": "Scheduled",
@@ -595,7 +639,7 @@ class SentinelIntegration(BaseIntegration):
                 "description": f"Created by ThreatSentinel SOC Agent - {context.get('description', '')}",
                 "severity": context.get("severity", "Medium"),
                 "enabled": True,
-                "query": context.get("kql_query", f"SecurityEvent | where Computer contains '{_sanitize_indicator(context.get('target', ''))}'"),
+                "query": f"SecurityEvent | where Computer contains '{_sanitize_indicator(context.get('target', ''))}'",
                 "queryFrequency": "PT1H",
                 "queryPeriod": "PT1H",
                 "triggerOperator": "GreaterThan",
@@ -621,15 +665,18 @@ class SentinelIntegration(BaseIntegration):
     async def _add_to_watchlist(self, indicator: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Add indicator to Azure Sentinel watchlist"""
         watchlist_alias = context.get("watchlist", "ThreatSentinel_Threat_Indicators")
+        alias = safe_path_segment(watchlist_alias, "watchlist alias")
+        indicator = _sanitize_indicator(indicator)
 
-        # Create watchlist if it doesn't exist
         try:
             await self._create_watchlist(watchlist_alias)
-        except Exception:
-            pass  # May already exist
+        except Exception as e:
+            self.logger.debug(f"Watchlist create skipped ({type(e).__name__}); it may already exist")
 
-        # Add item to watchlist
-        url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.OperationalInsights/workspaces/{self.workspace_name}/providers/Microsoft.SecurityInsights/watchlists/{watchlist_alias}/watchlistItems/{hash(indicator) % 10000}"
+        item_id = stable_reference(alias, indicator, length=32)
+        item_uuid = f"{item_id[:8]}-{item_id[8:12]}-{item_id[12:16]}-{item_id[16:20]}-{item_id[20:32]}"
+        url = (f"{self._workspace_url()}/providers/Microsoft.SecurityInsights/watchlists/{alias}"
+               f"/watchlistItems/{item_uuid}")
 
         item_data = {
             "properties": {
@@ -658,7 +705,8 @@ class SentinelIntegration(BaseIntegration):
 
     async def _create_watchlist(self, alias: str):
         """Create watchlist if it doesn't exist"""
-        url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.OperationalInsights/workspaces/{self.workspace_name}/providers/Microsoft.SecurityInsights/watchlists/{alias}"
+        url = (f"{self._workspace_url()}/providers/Microsoft.SecurityInsights/watchlists/"
+               f"{safe_path_segment(alias, 'watchlist alias')}")
 
         watchlist_data = {
             "properties": {

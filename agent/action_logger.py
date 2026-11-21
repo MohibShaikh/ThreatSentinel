@@ -5,17 +5,42 @@ Provides detailed logging of all agent actions, decisions, integrations,
 and outcomes for audit trails, compliance, and continuous learning.
 """
 
+import hashlib
 import json
+import logging
 import sqlite3
+import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import logging
+from typing import Any, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+GENESIS_HASH = "0" * 64
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_ts(value: str) -> datetime:
+    ts = datetime.fromisoformat(value)
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def compute_entry_hash(prev_hash: str, entry_id: str, timestamp: str, investigation_id: Optional[str],
+                       action_type: str, status: str, level: str, component: str, description: str,
+                       details_json: Optional[str], error_message: Optional[str]) -> str:
+    """SHA-256 over the previous link and every audited field of an entry."""
+    material = "|".join([
+        prev_hash or GENESIS_HASH, entry_id, timestamp, investigation_id or "", action_type, status,
+        level, component, description, details_json or "", error_message or "",
+    ])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 class ActionType(Enum):
     INVESTIGATION_STARTED = "investigation_started"
@@ -79,17 +104,17 @@ class ActionLog:
     def from_dict(cls, data: Dict[str, Any]) -> 'ActionLog':
         return cls(
             id=data['id'],
-            timestamp=datetime.fromisoformat(data['timestamp']),
+            timestamp=_parse_ts(data['timestamp']),
             investigation_id=data['investigation_id'],
             action_type=ActionType(data['action_type']),
             status=ActionStatus(data['status']),
             level=LogLevel(data['level']),
             component=data['component'],
             description=data['description'],
-            details=json.loads(data['details']) if data['details'] else {},
-            duration_ms=data['duration_ms'],
-            error_message=data['error_message'],
-            correlation_id=data['correlation_id']
+            details=json.loads(data['details']) if data.get('details') else {},
+            duration_ms=data.get('duration_ms'),
+            error_message=data.get('error_message'),
+            correlation_id=data.get('correlation_id')
         )
 
 class ActionLogger:
@@ -108,12 +133,23 @@ class ActionLogger:
 
     def __init__(self, db_path: str = "data/action_logs.db"):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_lock = threading.Lock()
         self._init_database()
 
+    @contextmanager
+    def _db(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _init_database(self):
-        """Initialize SQLite database for action logs."""
-        with sqlite3.connect(self.db_path) as conn:
+        """Create the table, enable WAL and migrate older schemas in place."""
+        with self._db() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS action_logs (
                     id TEXT PRIMARY KEY,
@@ -127,30 +163,22 @@ class ActionLogger:
                     details TEXT,
                     duration_ms INTEGER,
                     error_message TEXT,
-                    correlation_id TEXT
+                    correlation_id TEXT,
+                    prev_hash TEXT,
+                    entry_hash TEXT
                 )
             """)
-
-            # Indexes for efficient querying
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_timestamp
-                ON action_logs(timestamp DESC)
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_investigation_id
-                ON action_logs(investigation_id, timestamp DESC)
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_action_type_status
-                ON action_logs(action_type, status, timestamp DESC)
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_component_level
-                ON action_logs(component, level, timestamp DESC)
-            """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(action_logs)")}
+            for column in ("prev_hash", "entry_hash"):
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE action_logs ADD COLUMN {column} TEXT")  # noqa: S608 - fixed names
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON action_logs(timestamp DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_investigation_id "
+                         "ON action_logs(investigation_id, timestamp DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_action_type_status "
+                         "ON action_logs(action_type, status, timestamp DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_component_level "
+                         "ON action_logs(component, level, timestamp DESC)")
 
     def log_action(self,
                    action_type: ActionType,
@@ -167,7 +195,7 @@ class ActionLogger:
 
         action_log = ActionLog(
             id=str(uuid.uuid4()),
-            timestamp=datetime.utcnow(),
+            timestamp=_utcnow(),
             investigation_id=investigation_id,
             action_type=action_type,
             status=status,
@@ -180,18 +208,30 @@ class ActionLogger:
             correlation_id=correlation_id
         )
 
-        # Store in database
-        with sqlite3.connect(self.db_path) as conn:
+        timestamp = action_log.timestamp.isoformat()
+        details_json = json.dumps(action_log.details, default=str, sort_keys=True)
+        with self._write_lock, self._db() as conn:
+            # BEGIN IMMEDIATE serializes writers across processes so the chain stays linear
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT entry_hash FROM action_logs WHERE entry_hash IS NOT NULL ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = row[0] if row else GENESIS_HASH
+            entry_hash = compute_entry_hash(
+                prev_hash, action_log.id, timestamp, action_log.investigation_id,
+                action_log.action_type.value, action_log.status.value, action_log.level.value,
+                action_log.component, action_log.description, details_json, action_log.error_message,
+            )
             conn.execute("""
-                INSERT INTO action_logs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO action_logs
+                (id, timestamp, investigation_id, action_type, status, level, component, description,
+                 details, duration_ms, error_message, correlation_id, prev_hash, entry_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                action_log.id, action_log.timestamp.isoformat(),
-                action_log.investigation_id, action_log.action_type.value,
-                action_log.status.value, action_log.level.value,
-                action_log.component, action_log.description,
-                json.dumps(action_log.details),
-                action_log.duration_ms, action_log.error_message,
-                action_log.correlation_id
+                action_log.id, timestamp, action_log.investigation_id, action_log.action_type.value,
+                action_log.status.value, action_log.level.value, action_log.component,
+                action_log.description, details_json, action_log.duration_ms,
+                action_log.error_message, action_log.correlation_id, prev_hash, entry_hash,
             ))
 
         # Also log to Python logger for real-time monitoring
@@ -352,17 +392,17 @@ class ActionLogger:
 
     def get_investigation_logs(self, investigation_id: str) -> List[ActionLog]:
         """Get all logs for a specific investigation."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             cursor = conn.execute("""
                 SELECT * FROM action_logs
                 WHERE investigation_id = ?
-                ORDER BY timestamp ASC
+                ORDER BY timestamp ASC, rowid ASC
             """, (investigation_id,))
 
             logs = []
             for row in cursor.fetchall():
                 columns = [desc[0] for desc in cursor.description]
-                log_data = dict(zip(columns, row))
+                log_data = dict(zip(columns, row, strict=True))
                 logs.append(ActionLog.from_dict(log_data))
 
             return logs
@@ -370,9 +410,9 @@ class ActionLogger:
     def get_component_performance(self, component: str,
                                  hours: int = 24) -> Dict[str, Any]:
         """Get performance metrics for a specific component."""
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = _utcnow() - timedelta(hours=hours)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             # Total actions
             cursor = conn.execute("""
                 SELECT COUNT(*) FROM action_logs
@@ -426,9 +466,9 @@ class ActionLogger:
 
     def get_system_health(self, hours: int = 1) -> Dict[str, Any]:
         """Get overall system health metrics."""
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = _utcnow() - timedelta(hours=hours)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             # Overall stats
             cursor = conn.execute("""
                 SELECT
@@ -506,19 +546,136 @@ class ActionLogger:
         return timeline
 
     def cleanup_old_logs(self, days: int = 90) -> int:
-        """Clean up old action logs."""
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("""
-                DELETE FROM action_logs
-                WHERE timestamp < ?
-            """, (cutoff_date.isoformat(),))
-
-            deleted_count = cursor.rowcount
-
+        """Delete old logs and record the pruning anchor so the chain stays verifiable."""
+        cutoff_date = (_utcnow() - timedelta(days=days)).isoformat()
+        with self._write_lock, self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT entry_hash FROM action_logs WHERE timestamp < ? ORDER BY rowid DESC LIMIT 1",
+                (cutoff_date,),
+            ).fetchone()
+            deleted_count = conn.execute(
+                "DELETE FROM action_logs WHERE timestamp < ?", (cutoff_date,)
+            ).rowcount
+        if deleted_count:
+            self.log_action(
+                action_type=ActionType.SYSTEM_EVENT,
+                component="AuditLog",
+                description=f"Pruned {deleted_count} action logs older than {days} days",
+                level=LogLevel.WARNING,
+                details={"pruned_count": deleted_count, "anchor_hash": row[0] if row else None,
+                         "cutoff": cutoff_date},
+            )
         logger.info(f"Cleaned up {deleted_count} old action logs")
         return deleted_count
+
+    def verify_integrity(self) -> Dict[str, Any]:
+        """Walk the hash chain and report any entry that was altered, removed or reordered."""
+        broken: List[Dict[str, Any]] = []
+        legacy = 0
+        total = 0
+        expected_prev: Optional[str] = None
+        anchors = {GENESIS_HASH}
+        with self._db() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT rowid, * FROM action_logs ORDER BY rowid ASC").fetchall()
+        for row in rows:
+            if row["component"] == "AuditLog" and row["details"]:
+                try:
+                    anchor = json.loads(row["details"]).get("anchor_hash")
+                except (ValueError, AttributeError):
+                    anchor = None
+                if anchor:
+                    anchors.add(anchor)
+
+        for row in rows:
+            total += 1
+            if not row["entry_hash"]:
+                legacy += 1
+                continue
+            recomputed = compute_entry_hash(
+                row["prev_hash"], row["id"], row["timestamp"], row["investigation_id"], row["action_type"],
+                row["status"], row["level"], row["component"], row["description"], row["details"],
+                row["error_message"],
+            )
+            if recomputed != row["entry_hash"]:
+                broken.append({"id": row["id"], "rowid": row["rowid"], "reason": "entry_hash mismatch (content altered)"})
+            if expected_prev is None:
+                if row["prev_hash"] not in anchors:
+                    broken.append({"id": row["id"], "rowid": row["rowid"],
+                                   "reason": "chain start does not match genesis or a recorded prune anchor"})
+            elif row["prev_hash"] != expected_prev:
+                broken.append({"id": row["id"], "rowid": row["rowid"],
+                               "reason": "prev_hash does not match previous entry (deleted or reordered)"})
+            expected_prev = row["entry_hash"]
+
+        return {
+            "valid": not broken,
+            "total_entries": total,
+            "chained_entries": total - legacy,
+            "legacy_unchained_entries": legacy,
+            "broken_links": broken[:100],
+            "head_hash": expected_prev,
+            "verified_at": _utcnow().isoformat(),
+        }
+
+    def search_logs(self, investigation_id: Optional[str] = None, component: Optional[str] = None,
+                    action_type: Optional[str] = None, level: Optional[str] = None,
+                    since_hours: int = 24, limit: int = 100) -> List[ActionLog]:
+        """Filtered log query with parameter binding only."""
+        clauses = ["timestamp > ?"]
+        params: List[Any] = [(_utcnow() - timedelta(hours=since_hours)).isoformat()]
+        for column, value in (("investigation_id", investigation_id), ("component", component),
+                              ("action_type", action_type), ("level", level)):
+            if value:
+                clauses.append(f"{column} = ?")
+                params.append(value)
+        params.append(max(1, min(int(limit), 1000)))
+        query = (f"SELECT * FROM action_logs WHERE {' AND '.join(clauses)} "  # noqa: S608 - fixed column names
+                 "ORDER BY timestamp DESC, rowid DESC LIMIT ?")
+        with self._db() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, params).fetchall()
+        return [ActionLog.from_dict(dict(r)) for r in rows]
+
+    def get_active_components(self, hours: int = 24) -> List[Dict[str, Any]]:
+        since = (_utcnow() - timedelta(hours=hours)).isoformat()
+        with self._db() as conn:
+            rows = conn.execute("""
+                SELECT component, COUNT(*), MAX(timestamp),
+                       SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END)
+                FROM action_logs WHERE timestamp > ?
+                GROUP BY component ORDER BY COUNT(*) DESC
+            """, (since,)).fetchall()
+        return [{"component": r[0], "action_count": r[1], "last_activity": r[2], "error_count": r[3] or 0}
+                for r in rows]
+
+    def get_overview(self, hours: int = 24) -> Dict[str, Any]:
+        since = (_utcnow() - timedelta(hours=hours)).isoformat()
+        with self._db() as conn:
+            total_investigations = conn.execute(
+                "SELECT COUNT(DISTINCT investigation_id) FROM action_logs WHERE investigation_id IS NOT NULL"
+            ).fetchone()[0]
+            total_actions = conn.execute("SELECT COUNT(*) FROM action_logs").fetchone()[0]
+            recent_actions = conn.execute(
+                "SELECT COUNT(*) FROM action_logs WHERE timestamp > ?", (since,)).fetchone()[0]
+            recent_errors = conn.execute(
+                "SELECT COUNT(*) FROM action_logs WHERE timestamp > ? AND level = 'error'", (since,)
+            ).fetchone()[0]
+            top_components = dict(conn.execute("""
+                SELECT component, COUNT(*) AS count FROM action_logs WHERE timestamp > ?
+                GROUP BY component ORDER BY count DESC LIMIT 5
+            """, (since,)).fetchall())
+        error_rate = (recent_errors / recent_actions * 100) if recent_actions else 0.0
+        return {
+            "total_investigations_tracked": total_investigations,
+            "total_actions_logged": total_actions,
+            f"recent_actions_{hours}h": recent_actions,
+            f"recent_errors_{hours}h": recent_errors,
+            f"error_rate_{hours}h": round(error_rate, 2),
+            f"top_components_{hours}h": top_components,
+            "audit_health": "healthy" if error_rate < 5 else "degraded" if error_rate < 20 else "unhealthy",
+        }
 
     def export_audit_trail(self, investigation_id: str) -> Dict[str, Any]:
         """Export complete audit trail for an investigation."""
@@ -549,5 +706,5 @@ class ActionLogger:
             'error_count': error_count,
             'action_breakdown': action_counts,
             'timeline': timeline,
-            'export_timestamp': datetime.utcnow().isoformat()
+            'export_timestamp': _utcnow().isoformat()
         }

@@ -11,6 +11,7 @@ asyncio-throttle>=1.0.2
 
 # Security and networking
 validators>=0.22.0
+defusedxml>=0.7.1
 
 # Templating and reports
 jinja2>=3.1.0

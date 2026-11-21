@@ -6,11 +6,16 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from enum import Enum
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
+import json
 import logging
-import asyncio
+import re
+import time
+from urllib.parse import quote
+
 import aiohttp
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IntegrationType(str, Enum):
@@ -53,18 +58,38 @@ class ActionResult:
 
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.utcnow()
+            self.timestamp = datetime.now(timezone.utc)
 
 
 class IntegrationResponse(BaseModel):
     """Standardized response from integrations"""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     integration_name: str
     integration_type: IntegrationType
     success: bool
     actions_executed: List[ActionResult]
     total_execution_time: float
     error_details: Optional[Dict[str, Any]] = None
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")
+
+
+def stable_reference(*parts: Any, length: int = 10) -> str:
+    """Deterministic reference ID (unlike hash(), stable across processes)."""
+    material = "|".join(str(p) for p in parts)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:length]
+
+
+def safe_path_segment(value: Any, what: str = "identifier") -> str:
+    """Validate and URL-encode a value interpolated into a URL path."""
+    text = str(value or "").strip()
+    if not text or "/" in text or "\\" in text or ".." in text or "?" in text or "#" in text \
+            or not _PATH_SEGMENT_RE.fullmatch(text):
+        raise ValueError(f"Unsafe {what}: {text!r}")
+    return quote(text, safe="")
 
 
 class BaseIntegration(ABC):
@@ -207,25 +232,32 @@ class BaseIntegration(ABC):
         Returns:
             Dict[str, Any]: Response data
         """
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
+        if self.session is None:
+            raise RuntimeError(f"{self.name} integration is not connected")
 
         try:
             async with self.session.request(method, url, **kwargs) as response:
-                execution_time = asyncio.get_event_loop().time() - start_time
+                execution_time = time.monotonic() - start_time
+                text = await response.text()
 
                 if response.status >= 400:
-                    error_text = await response.text()
-                    self.logger.error(f"HTTP {response.status}: {error_text}")
-                    raise Exception(f"HTTP {response.status}: {error_text}")
+                    self.logger.error(f"HTTP {response.status} from {self.name}: {text[:300]}")
+                    raise Exception(f"HTTP {response.status}: {text[:300]}")
 
-                data = await response.json()
-                self.logger.debug(f"Request to {url} completed in {execution_time:.2f}s")
-
-                return data
+                self.logger.debug(f"Request to {self.name} completed in {execution_time:.2f}s")
+                if not text.strip():
+                    return {}
+                content_type = response.headers.get("Content-Type", "") if response.headers else ""
+                try:
+                    data = json.loads(text)
+                except ValueError:
+                    return {"raw_text": text[:10000], "content_type": content_type}
+                return data if isinstance(data, dict) else {"data": data}
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
-            self.logger.error(f"Request to {url} failed after {execution_time:.2f}s: {e}")
+            execution_time = time.monotonic() - start_time
+            self.logger.error(f"Request to {self.name} failed after {execution_time:.2f}s: {type(e).__name__}")
             raise
 
     def get_config_value(self, key: str, default: Any = None) -> Any:

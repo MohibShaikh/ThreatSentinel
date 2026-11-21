@@ -3,6 +3,7 @@ Integration Registry for Managing SOC Tool Integrations
 """
 
 import asyncio
+import time
 import logging
 from typing import Dict, Any, List, Optional, Type
 from .base import BaseIntegration, IntegrationResponse, IntegrationType, ActionType, ActionResult
@@ -141,7 +142,7 @@ class IntegrationRegistry:
         Returns:
             IntegrationResponse: Aggregated response from all integrations
         """
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         # Get relevant integrations
         if preferred_integrations:
@@ -196,7 +197,7 @@ class IntegrationRegistry:
                     failed_results.append(result)
                     self.logger.warning(f"Integration {integration_name} failed: {result.error_message}")
 
-        total_execution_time = asyncio.get_event_loop().time() - start_time
+        total_execution_time = time.monotonic() - start_time
 
         return IntegrationResponse(
             integration_name="registry",
@@ -265,7 +266,6 @@ class IntegrationRegistry:
             "total_active": len(self.active_integrations),
             "integration_status": {},
             "capabilities": self._get_capabilities_summary(),
-            "health_check": asyncio.create_task(self._health_check())
         }
 
         for name, integration in self.integrations.items():
@@ -353,12 +353,24 @@ class IntegrationRegistry:
             self.logger.error(f"Failed to add integration {name}: {e}")
             return False
 
+    async def health_check(self) -> Dict[str, bool]:
+        """Public health check over active integrations"""
+        return await self._health_check()
+
+    async def remove_integration_async(self, name: str) -> bool:
+        """Disconnect (awaited) and remove an integration"""
+        integration = self.active_integrations.pop(name, None)
+        if integration is not None:
+            try:
+                await integration.disconnect()
+            except Exception as e:
+                self.logger.error(f"Error disconnecting {name}: {e}")
+        return self.integrations.pop(name, None) is not None
+
     def remove_integration(self, name: str) -> bool:
-        """Remove an integration"""
+        """Remove an integration (sync; prefer remove_integration_async to also disconnect)"""
         try:
             if name in self.active_integrations:
-                # Disconnect first
-                asyncio.create_task(self.active_integrations[name].disconnect())
                 del self.active_integrations[name]
 
             if name in self.integrations:

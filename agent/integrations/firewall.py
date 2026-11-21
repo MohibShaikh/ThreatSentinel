@@ -2,12 +2,12 @@
 Firewall Integration Adapters
 """
 
-import asyncio
+import time
 import ipaddress
 import re
 from typing import Dict, Any, List
 from xml.sax.saxutils import escape, quoteattr
-from .base import BaseIntegration, ActionResult, ActionType, IntegrationType
+from .base import BaseIntegration, ActionResult, ActionType, IntegrationType, stable_reference
 
 _DOMAIN_RE = re.compile(
     r'^[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?'
@@ -15,7 +15,34 @@ _DOMAIN_RE = re.compile(
 )
 _URL_ENTRY_RE = re.compile(r'^[A-Za-z0-9.\-*/:?=&]+$')
 _RULE_NAME_RE = re.compile(r'^[\w\- ]+$')
+_OBJECT_NAME_RE = re.compile(r'^[\w\-]{1,63}$')
+_FORTI_NAME_RE = re.compile(r'^[\w\-. ]{1,79}$')
 _ALLOWED_RULE_ACTIONS = {'deny', 'allow', 'drop', 'reset'}
+_PFSENSE_ACTIONS = {'block', 'reject', 'pass'}
+_PFSENSE_PROTOCOLS = {'any', 'tcp', 'udp', 'tcp/udp', 'icmp'}
+
+
+def _validate_object_name(value: str, what: str) -> str:
+    """Names interpolated into PAN-OS xpaths must be plain identifiers"""
+    value = str(value or '').strip()
+    if not _OBJECT_NAME_RE.fullmatch(value):
+        raise ValueError(f"Unsafe {what}: {value!r}")
+    return value
+
+
+def _validate_forti_name(value: str, what: str) -> str:
+    value = str(value or '').strip()
+    if not _FORTI_NAME_RE.fullmatch(value):
+        raise ValueError(f"Unsafe {what}: {value!r}")
+    return value
+
+
+def _validate_address_or_any(value: str) -> str:
+    """'any' or a single IP / CIDR network"""
+    value = str(value or 'any').strip()
+    if value.lower() == 'any':
+        return 'any'
+    return str(ipaddress.ip_network(value, strict=False))
 
 
 def _validate_ip(value: str) -> str:
@@ -49,7 +76,7 @@ class PaloAltoIntegration(BaseIntegration):
         self.api_key = config.get("api_key")
         self.hostname = config.get("hostname")
         self.port = config.get("port", 443)
-        self.vsys = config.get("vsys", "vsys1")
+        self.vsys = _validate_object_name(config.get("vsys", "vsys1"), "vsys")
 
     async def connect(self) -> bool:
         """Connect to PAN-OS API"""
@@ -99,7 +126,7 @@ class PaloAltoIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action on Palo Alto firewall"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.BLOCK_IP:
@@ -110,10 +137,12 @@ class PaloAltoIntegration(BaseIntegration):
                 result = await self._block_domain(target, context)
             elif action_type == ActionType.CREATE_RULE:
                 result = await self._create_security_rule(target, context)
+            elif action_type == ActionType.ADD_TO_WATCHLIST:
+                result = await self._add_ip_to_group(target, "ThreatSentinel_Watchlist", "watchlisted", context)
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -125,7 +154,7 @@ class PaloAltoIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -138,7 +167,12 @@ class PaloAltoIntegration(BaseIntegration):
             )
 
     async def _block_ip(self, ip: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Block IP address by adding to address group"""
+        """Block IP address by adding it to the blocked address group"""
+        return await self._add_ip_to_group(ip, "ThreatSentinel_Blocked_IPs", "blocked", context)
+
+    async def _add_ip_to_group(self, ip: str, group_name: str, verb: str,
+                               context: Dict[str, Any]) -> Dict[str, Any]:
+        """Create an address object for the IP and add it to a static address group"""
         url = f"https://{self.hostname}:{self.port}/api/"
 
         ip = _validate_ip(ip)
@@ -153,13 +187,12 @@ class PaloAltoIntegration(BaseIntegration):
         }
 
         response = await self._make_request("POST", url, params=params)
-
-        # Add to blocked group
-        await self._add_to_address_group(address_name, "ThreatSentinel_Blocked_IPs")
+        await self._add_to_address_group(address_name, group_name)
 
         return {
             "address_object": address_name,
-            "action": "blocked",
+            "address_group": group_name,
+            "action": verb,
             "reference_id": response.get("msg", {}).get("line", ""),
             "reason": context.get("reason", "Security threat")
         }
@@ -245,12 +278,15 @@ class PaloAltoIntegration(BaseIntegration):
     async def _add_to_address_group(self, address_name: str, group_name: str):
         """Add address object to address group"""
         url = f"https://{self.hostname}:{self.port}/api/"
+        group_name = _validate_object_name(group_name, "address group name")
+        address_name = _validate_object_name(address_name, "address object name")
+        vsys = _validate_object_name(self.vsys, "vsys")
 
         params = {
             "type": "config",
             "action": "set",
-            "xpath": f"/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='{self.vsys}']/address-group/entry[@name='{group_name}']/static",
-            "element": f"<member>{address_name}</member>",
+            "xpath": f"/config/devices/entry[@name='localhost.localdomain']/vsys/entry[@name='{vsys}']/address-group/entry[@name='{group_name}']/static",
+            "element": f"<member>{escape(address_name)}</member>",
             "key": self.api_key
         }
 
@@ -314,19 +350,21 @@ class FortinetIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action on Fortinet firewall"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.BLOCK_IP:
                 result = await self._block_ip(target, context)
             elif action_type == ActionType.BLOCK_URL:
                 result = await self._block_url(target, context)
+            elif action_type == ActionType.BLOCK_DOMAIN:
+                result = await self._block_domain(target, context)
             elif action_type == ActionType.CREATE_RULE:
                 result = await self._create_firewall_policy(target, context)
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -338,7 +376,7 @@ class FortinetIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -355,14 +393,13 @@ class FortinetIntegration(BaseIntegration):
         # Create address object
         ip = _validate_ip(ip)
         address_name = f"ThreatSentinel_Blocked_{ip.replace('.', '_').replace(':', '_')}"
-        url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/firewall/address"
-
-        address_data = {
-            "name": address_name,
-            "type": "ipmask",
-            "subnet": f"{ip}/32",
-            "comment": f"Blocked by ThreatSentinel SOC Agent - {context.get('reason', 'Security threat')}"
-        }
+        comment = f"Blocked by ThreatSentinel SOC Agent - {str(context.get('reason', 'Security threat'))[:200]}"
+        if ipaddress.ip_address(ip).version == 6:
+            url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/firewall/address6"
+            address_data = {"name": address_name, "type": "ipprefix", "ip6": f"{ip}/128", "comment": comment}
+        else:
+            url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/firewall/address"
+            address_data = {"name": address_name, "type": "ipmask", "subnet": f"{ip}/32", "comment": comment}
 
         response = await self._make_request("POST", url, json=address_data)
 
@@ -382,7 +419,7 @@ class FortinetIntegration(BaseIntegration):
         url_path = _validate_url_entry(url_path)
 
         url_data = {
-            "name": f"ThreatSentinel_Blocked_URL_{abs(hash(url_path)) % 10000}",
+            "name": f"ThreatSentinel_Blocked_URL_{stable_reference(url_path)}",
             "entries": [
                 {
                     "url": url_path,
@@ -390,7 +427,7 @@ class FortinetIntegration(BaseIntegration):
                     "action": "block"
                 }
             ],
-            "comment": f"Blocked by ThreatSentinel SOC Agent - {context.get('reason', 'Security threat')}"
+            "comment": f"Blocked by ThreatSentinel SOC Agent - {str(context.get('reason', 'Security threat'))[:200]}"
         }
 
         response = await self._make_request("POST", api_url, json=url_data)
@@ -398,6 +435,26 @@ class FortinetIntegration(BaseIntegration):
         return {
             "url": url_path,
             "filter_name": url_data["name"],
+            "action": "blocked",
+            "reference_id": response.get("mkey")
+        }
+
+    async def _block_domain(self, domain: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Block a domain and all its subdomains with a wildcard web filter entry"""
+        domain = _validate_domain(domain)
+        api_url = f"https://{self.hostname}:{self.port}/api/v2/cmdb/webfilter/urlfilter"
+        filter_data = {
+            "name": f"ThreatSentinel_Blocked_Domain_{stable_reference(domain)}",
+            "entries": [
+                {"url": domain, "type": "simple", "action": "block"},
+                {"url": f"*.{domain}", "type": "wildcard", "action": "block"},
+            ],
+            "comment": f"Blocked by ThreatSentinel SOC Agent - {str(context.get('reason', 'Security threat'))[:200]}"
+        }
+        response = await self._make_request("POST", api_url, json=filter_data)
+        return {
+            "domain": domain,
+            "filter_name": filter_data["name"],
             "action": "blocked",
             "reference_id": response.get("mkey")
         }
@@ -415,10 +472,10 @@ class FortinetIntegration(BaseIntegration):
 
         policy_data = {
             "name": policy_name,
-            "srcintf": [{"name": context.get("source_interface", "any")}],
-            "dstintf": [{"name": context.get("dest_interface", "any")}],
-            "srcaddr": [{"name": context.get("source", "all")}],
-            "dstaddr": [{"name": context.get("destination", "all")}],
+            "srcintf": [{"name": _validate_forti_name(context.get("source_interface", "any"), "source interface")}],
+            "dstintf": [{"name": _validate_forti_name(context.get("dest_interface", "any"), "destination interface")}],
+            "srcaddr": [{"name": _validate_forti_name(context.get("source", "all"), "source address")}],
+            "dstaddr": [{"name": _validate_forti_name(context.get("destination", "all"), "destination address")}],
             "service": [{"name": "ALL"}],
             "action": action,
             "status": "enable",
@@ -493,17 +550,19 @@ class PfSenseIntegration(BaseIntegration):
     async def execute_action(self, action_type: ActionType, target: str,
                            context: Dict[str, Any]) -> ActionResult:
         """Execute action on pfSense firewall"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         try:
             if action_type == ActionType.BLOCK_IP:
                 result = await self._block_ip(target, context)
             elif action_type == ActionType.CREATE_RULE:
                 result = await self._create_firewall_rule(target, context)
+            elif action_type == ActionType.ADD_TO_WATCHLIST:
+                result = await self._add_to_watchlist_alias(target, context)
             else:
                 raise ValueError(f"Unsupported action: {action_type}")
 
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
 
             return ActionResult(
                 success=True,
@@ -515,7 +574,7 @@ class PfSenseIntegration(BaseIntegration):
             )
 
         except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
+            execution_time = time.monotonic() - start_time
             self.logger.error(f"Action {action_type} failed for {target}: {e}")
 
             return ActionResult(
@@ -530,13 +589,14 @@ class PfSenseIntegration(BaseIntegration):
     async def _block_ip(self, ip: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Block IP by creating firewall rule"""
         url = f"https://{self.hostname}:{self.port}/api/v1/firewall/rule"
+        ip = _validate_ip(ip)
 
         rule_data = {
             "type": "block",
-            "interface": context.get("interface", "wan"),
+            "interface": _validate_object_name(context.get("interface", "wan"), "interface"),
             "source": {"address": ip},
             "destination": {"address": "any"},
-            "descr": f"ThreatSentinel SOC Agent Block - {context.get('reason', 'Security threat')}"
+            "descr": f"ThreatSentinel SOC Agent Block - {_sanitize_descr(context.get('reason', 'Security threat'))}"
         }
 
         response = await self._make_request("POST", url, json=rule_data)
@@ -553,13 +613,20 @@ class PfSenseIntegration(BaseIntegration):
         """Create custom firewall rule"""
         url = f"https://{self.hostname}:{self.port}/api/v1/firewall/rule"
 
+        action = str(context.get("action", "block")).lower()
+        if action not in _PFSENSE_ACTIONS:
+            raise ValueError(f"Unsupported rule action: {action!r}")
+        protocol = str(context.get("protocol", "any")).lower()
+        if protocol not in _PFSENSE_PROTOCOLS:
+            raise ValueError(f"Unsupported protocol: {protocol!r}")
+
         rule_data = {
-            "type": context.get("action", "block"),
-            "interface": context.get("interface", "wan"),
-            "source": {"address": context.get("source", "any")},
-            "destination": {"address": context.get("destination", "any")},
-            "protocol": context.get("protocol", "any"),
-            "descr": f"ThreatSentinel SOC Agent - {rule_description}"
+            "type": action,
+            "interface": _validate_object_name(context.get("interface", "wan"), "interface"),
+            "source": {"address": _validate_address_or_any(context.get("source", "any"))},
+            "destination": {"address": _validate_address_or_any(context.get("destination", "any"))},
+            "protocol": protocol,
+            "descr": f"ThreatSentinel SOC Agent - {_sanitize_descr(rule_description)}"
         }
 
         response = await self._make_request("POST", url, json=rule_data)
@@ -570,3 +637,21 @@ class PfSenseIntegration(BaseIntegration):
             "action": rule_data["type"],
             "reference_id": response.get("id")
         }
+
+    async def _add_to_watchlist_alias(self, ip: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Add an IP to the ThreatSentinel_Watchlist firewall alias"""
+        url = f"https://{self.hostname}:{self.port}/api/v1/firewall/alias/entry"
+        ip = _validate_ip(ip)
+        data = {
+            "name": "ThreatSentinel_Watchlist",
+            "address": [ip],
+            "detail": [f"ThreatSentinel {_sanitize_descr(context.get('investigation_id', ''))}"],
+        }
+        response = await self._make_request("POST", url, json=data)
+        return {"ip": ip, "alias": "ThreatSentinel_Watchlist", "action": "watchlisted",
+                "reference_id": response.get("id") or stable_reference(ip)}
+
+
+def _sanitize_descr(value: Any, limit: int = 200) -> str:
+    """Firewall descriptions: printable text only, no control characters"""
+    return re.sub(r"[^\w\s.,:;()/@#+\-]", "", str(value or ""))[:limit]
