@@ -21,6 +21,7 @@ from .reporter import IncidentReporter
 from .task_queue import TaskQueue, TaskPriority, TaskStatus
 from .action_logger import ActionLogger, ActionType, LogLevel
 from .llm import create_llm_provider
+from .environment import AgentEnvironment
 
 __all__ = [
     "SOCAgentPlanner",
@@ -34,4 +35,5 @@ __all__ = [
     "ActionType",
     "LogLevel",
     "create_llm_provider",
+    "AgentEnvironment",
 ]
