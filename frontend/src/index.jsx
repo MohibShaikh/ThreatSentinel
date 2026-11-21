@@ -10,8 +10,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
-      staleTime: 5 * 60 * 1000, // 5 minutes
+      retry: (count, error) => error?.response?.status !== 401 && error?.response?.status !== 404 && count < 1,
+      staleTime: 15 * 1000,
     },
   },
 });
@@ -27,12 +27,15 @@ root.render(
           toastOptions={{
             duration: 4000,
             style: {
-              background: '#1e293b',
-              color: '#f8fafc',
+              background: '#1A1B17',
+              color: '#F1F0EA',
+              borderRadius: 0,
+              fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
+              fontSize: 12,
             },
           }}
         />
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>
-); 
+);

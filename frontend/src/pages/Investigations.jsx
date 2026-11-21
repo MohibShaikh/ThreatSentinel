@@ -1,281 +1,163 @@
-import React, { useState } from 'react';
-import { useQuery } from 'react-query';
-import { Link } from 'react-router-dom';
-import { 
-  Search, 
-  Filter, 
-  Plus, 
-  Eye, 
-  Clock, 
-  CheckCircle, 
-  AlertTriangle, 
-  XCircle,
-  Download,
-  MoreHorizontal
-} from 'lucide-react';
-import { useThreatSentinel } from '../context/ThreatSentinelContext';
-import { api } from '../context/ThreatSentinelContext';
+import React, { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from 'react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { api, useThreatSentinel } from '../context/ThreatSentinelContext';
 import InvestigationForm from '../components/Investigations/InvestigationForm';
+import {
+  Empty, ErrorNote, FrameworkChips, PanelHead, RiskBadge, StatusBadge, errorMessage, fmtTime,
+} from '../components/ui';
+
+const STATUSES = ['all', 'pending', 'running', 'pending_human_review', 'completed', 'failed', 'cancelled'];
+const RISKS = ['all', 'critical', 'high', 'medium', 'low'];
+const ACTIVE = new Set(['pending', 'queued', 'running']);
 
 const Investigations = () => {
-  const [showForm, setShowForm] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [riskFilter, setRiskFilter] = useState('all');
+  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { createInvestigation } = useThreatSentinel();
+  const [search, setSearch] = useState('');
+  const [risk, setRisk] = useState('all');
 
-  const { data: investigations = [], isLoading, refetch } = useQuery(
-    'investigations',
-    async () => {
-      const response = await api.get('/investigations/');
-      return response.data.investigations || [];
-    },
-    {
-      refetchInterval: 30000, // Refresh every 30 seconds
-    }
+  // Filter and form state live in the URL, so every view is linkable and survives refresh
+  const status = STATUSES.includes(params.get('status')) ? params.get('status') : 'all';
+  const showForm = params.get('new') === '1';
+  const setParam = (key, value) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value); else next.delete(key);
+    setParams(next, { replace: true });
+  };
+
+  const { data, isLoading, error } = useQuery(
+    ['investigations', 'list', status],
+    () => api.get('/investigations/', { params: { limit: 200, ...(status !== 'all' ? { status } : {}) } })
+      .then((r) => r.data),
+    { refetchInterval: 5000 }
   );
 
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle className="w-4 h-4 text-success-400" />;
-      case 'in_progress':
-        return <Clock className="w-4 h-4 text-warning-400" />;
-      case 'pending':
-        return <AlertTriangle className="w-4 h-4 text-warning-400" />;
-      case 'failed':
-        return <XCircle className="w-4 h-4 text-danger-400" />;
-      default:
-        return <Clock className="w-4 h-4 text-gray-400" />;
-    }
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'completed':
-        return 'status-success';
-      case 'in_progress':
-        return 'status-warning';
-      case 'pending':
-        return 'status-info';
-      case 'failed':
-        return 'status-critical';
-      default:
-        return 'status-info';
-    }
-  };
-
-  const getRiskColor = (risk) => {
-    switch (risk?.toLowerCase()) {
-      case 'critical':
-        return 'text-danger-400';
-      case 'high':
-        return 'text-warning-400';
-      case 'medium':
-        return 'text-yellow-400';
-      case 'low':
-        return 'text-success-400';
-      default:
-        return 'text-gray-400';
-    }
-  };
-
-  const filteredInvestigations = investigations.filter(investigation => {
-    const matchesSearch = investigation.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         investigation.id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         investigation.source_ip?.includes(searchTerm);
-    const matchesStatus = statusFilter === 'all' || investigation.status === statusFilter;
-    const matchesRisk = riskFilter === 'all' || investigation.risk_level?.toLowerCase() === riskFilter;
-    
-    return matchesSearch && matchesStatus && matchesRisk;
+  const cancel = useMutation((id) => api.delete(`/investigations/${id}`), {
+    onSuccess: () => {
+      toast.success('Investigation cancelled');
+      queryClient.invalidateQueries('investigations');
+      queryClient.invalidateQueries('agentStats');
+    },
+    onError: (e) => toast.error(`Cancel failed: ${errorMessage(e)}`),
   });
 
-  const handleCreateInvestigation = async (data) => {
-    await createInvestigation.mutateAsync(data);
-    setShowForm(false);
-    refetch();
-  };
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (data?.investigations || []).filter((inv) => {
+      if (risk !== 'all' && inv.risk_level !== risk) return false;
+      if (!q) return true;
+      return [inv.investigation_id, inv.title, inv.event_type, inv.source_ip, ...(inv.owasp_categories || []),
+        ...(inv.mitre_techniques || [])]
+        .some((v) => String(v || '').toLowerCase().includes(q));
+    });
+  }, [data, search, risk]);
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500"></div>
-      </div>
-    );
-  }
+  const submit = (payload) =>
+    createInvestigation.mutate(payload, {
+      onSuccess: (res) => navigate(`/investigations/${res.investigation_id}`),
+    });
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Investigations</h1>
-          <p className="text-gray-400 mt-1">Manage security incident investigations</p>
+      {showForm ? (
+        <InvestigationForm onSubmit={submit} onCancel={() => setParam('new', null)} submitting={createInvestigation.isLoading} />
+      ) : (
+        <div className="flex justify-end">
+          <button type="button" className="btn-primary" onClick={() => setParam('new', '1')}>New investigation</button>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="btn-primary flex items-center space-x-2"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Investigation</span>
-        </button>
-      </div>
-
-      {/* Filters */}
-      <div className="card p-6">
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="flex-1">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search investigations..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="input-field pl-10 w-full"
-              />
-            </div>
-          </div>
-          
-          <div className="flex gap-4">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="input-field"
-            >
-              <option value="all">All Status</option>
-              <option value="pending">Pending</option>
-              <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-            </select>
-            
-            <select
-              value={riskFilter}
-              onChange={(e) => setRiskFilter(e.target.value)}
-              className="input-field"
-            >
-              <option value="all">All Risk Levels</option>
-              <option value="critical">Critical</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Investigations Table */}
-      <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-dark-700">
-            <thead className="bg-dark-700">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Investigation
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Risk Level
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Event Type
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Created
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-dark-800 divide-y divide-dark-700">
-              {filteredInvestigations.map((investigation) => (
-                <tr key={investigation.id} className="hover:bg-dark-700 transition-colors duration-200">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-white">
-                        {investigation.title || `Investigation ${investigation.id}`}
-                      </div>
-                      <div className="text-sm text-gray-400">ID: {investigation.id}</div>
-                      {investigation.source_ip && (
-                        <div className="text-sm text-gray-400">IP: {investigation.source_ip}</div>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center space-x-2">
-                      {getStatusIcon(investigation.status)}
-                      <span className={`status-badge ${getStatusColor(investigation.status)}`}>
-                        {investigation.status?.replace('_', ' ') || 'unknown'}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`text-sm font-medium ${getRiskColor(investigation.risk_level)}`}>
-                      {investigation.risk_level?.toUpperCase() || 'UNKNOWN'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                    {investigation.event_type?.replace('_', ' ') || 'Unknown'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                    {new Date(investigation.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <div className="flex items-center space-x-2">
-                      <Link
-                        to={`/investigations/${investigation.id}`}
-                        className="text-primary-400 hover:text-primary-300"
-                        title="View Details"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </Link>
-                      <button
-                        className="text-gray-400 hover:text-gray-300"
-                        title="Download Report"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-                      <button
-                        className="text-gray-400 hover:text-gray-300"
-                        title="More Actions"
-                      >
-                        <MoreHorizontal className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        
-        {filteredInvestigations.length === 0 && (
-          <div className="text-center py-12">
-            <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-400">No investigations found</p>
-            <p className="text-sm text-gray-500 mt-1">
-              {searchTerm || statusFilter !== 'all' || riskFilter !== 'all' 
-                ? 'Try adjusting your filters' 
-                : 'Create your first investigation to get started'}
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Create Investigation Modal */}
-      {showForm && (
-        <InvestigationForm
-          onSubmit={handleCreateInvestigation}
-          onCancel={() => setShowForm(false)}
-          isLoading={createInvestigation.isLoading}
-        />
       )}
+
+      <div className="panel">
+        <PanelHead title={`Investigations · ${data?.total_count ?? '—'}`} />
+        <div className="flex flex-wrap items-end gap-4 px-4 py-3 border-b border-rule">
+          <div className="flex flex-wrap gap-px bg-rule border border-rule">
+            {STATUSES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setParam('status', s === 'all' ? null : s)}
+                className={`px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.08em] ${
+                  status === s ? 'bg-ink text-paper' : 'bg-panel text-inksoft hover:bg-paper'
+                }`}
+              >
+                {s.replace(/_/g, ' ')}
+              </button>
+            ))}
+          </div>
+          <select className="input-field !py-1.5" value={risk} onChange={(e) => setRisk(e.target.value)} aria-label="Risk filter">
+            {RISKS.map((r) => <option key={r} value={r}>{r === 'all' ? 'any risk' : r}</option>)}
+          </select>
+          <input
+            className="input-field !py-1.5 flex-1 min-w-[200px]"
+            placeholder="Search ID, title, IP, OWASP, MITRE…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
+        {error ? <div className="p-4"><ErrorNote error={error} what="investigations" /></div>
+          : isLoading ? <Empty>Loading…</Empty>
+          : rows.length === 0 ? <Empty>No investigations match.</Empty>
+          : (
+            <div className="overflow-x-auto scrollbar-thin">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>ID</th><th>Title / event</th><th>Source IP</th><th>Frameworks</th>
+                    <th>Risk</th><th>Status</th><th>Created</th><th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((inv) => (
+                    <tr key={inv.investigation_id}>
+                      <td className="num text-xs whitespace-nowrap">
+                        <Link to={`/investigations/${inv.investigation_id}`} className="hover:text-signal hover:underline">
+                          {inv.investigation_id}
+                        </Link>
+                        {inv.emergency_mode && <span className="ml-1.5 text-critical" title="Emergency mode">!</span>}
+                      </td>
+                      <td>
+                        <p className="text-sm">{inv.title || inv.event_type || '—'}</p>
+                        {inv.title && <p className="num text-[11px] text-muted">{inv.event_type}</p>}
+                      </td>
+                      <td className="num text-xs">{inv.source_ip || '—'}</td>
+                      <td>
+                        <FrameworkChips owasp={inv.owasp_categories || []} mitre={inv.mitre_techniques || []}
+                          injection={inv.prompt_injection_detected} max={3} />
+                      </td>
+                      <td><RiskBadge level={inv.risk_level} score={inv.risk_score} /></td>
+                      <td>
+                        <StatusBadge status={inv.status} />
+                        {ACTIVE.has(inv.status) && (
+                          <span className="num text-[10px] text-muted ml-1.5">{inv.progress || 0}%</span>
+                        )}
+                      </td>
+                      <td className="num text-xs text-muted whitespace-nowrap">{fmtTime(inv.created_at)}</td>
+                      <td className="text-right">
+                        {ACTIVE.has(inv.status) && (
+                          <button
+                            type="button"
+                            className="font-mono text-[11px] uppercase text-critical hover:underline disabled:text-muted"
+                            disabled={cancel.isLoading}
+                            onClick={() => cancel.mutate(inv.investigation_id)}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </div>
     </div>
   );
 };
 
-export default Investigations; 
+export default Investigations;
