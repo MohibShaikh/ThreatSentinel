@@ -1,239 +1,175 @@
 """
 ThreatSentinel SOC Agent - Monitoring Routes
 
-API routes for real-time monitoring, metrics, and system health.
+Real-time metrics, alerts, subscriptions and system status. Investigation
+metrics come from the InvestigationStore; API latency comes from
+RequestTimingMiddleware; intel call counts come from the tool registry.
 """
 
 import asyncio
+import json
 import logging
-import psutil
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from collections import deque
+from datetime import datetime, timedelta, timezone
+from typing import Any, Deque, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query, status
+import psutil
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
-from ..models import (
-    MonitoringMetrics,
-    AlertConfiguration,
-    EventSubscription
-)
 from agent import SOCAgentPlanner
-from backend.deps import get_current_user, get_soc_agent
 
+from .. import deps
+from ..config import get_settings
+from ..deps import get_current_user, get_soc_agent, get_store, verify_token
+from ..middleware import response_times
+from ..models import AlertConfiguration, EventSubscription, MonitoringMetrics
 
-# Create router
-router = APIRouter(dependencies=[Depends(get_current_user)], )
-
+router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
-# Global monitoring state
-metrics_history: List[Dict[str, Any]] = []
+metrics_history: Deque[Dict[str, Any]] = deque(maxlen=1000)
 active_websockets: List[WebSocket] = []
 alert_config = AlertConfiguration()
 subscriptions: Dict[str, EventSubscription] = {}
+WS_AUTH_TIMEOUT_SECONDS = 5
+WS_PUSH_INTERVAL_SECONDS = 5
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _avg(values: List[Optional[float]]) -> Optional[float]:
+    clean = [v for v in values if isinstance(v, (int, float))]
+    return round(sum(clean) / len(clean), 2) if clean else None
+
+
+def _process_memory_mb() -> float:
+    return round(psutil.Process().memory_info().rss / (1024 * 1024), 2)
+
+
+def build_metrics(agent: SOCAgentPlanner) -> MonitoringMetrics:
+    store = get_store()
+    midnight = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = store.metrics(since=midnight)
+    return MonitoringMetrics(
+        timestamp=_utcnow(),
+        active_investigations=store.active_count(),
+        completed_investigations_today=today["completed"],
+        average_investigation_time=today["average_duration_seconds"],
+        high_risk_events_today=today["high_risk"],
+        api_response_time=response_times.average_ms(last_n=200),
+        memory_usage_mb=_process_memory_mb(),
+        threat_intel_api_calls=dict(agent.tools.api_call_counts),
+        error_rate=today["error_rate"],
+    )
 
 
 @router.get("/metrics", response_model=MonitoringMetrics)
 async def get_current_metrics(agent: SOCAgentPlanner = Depends(get_soc_agent)):
-    """
-    Get current system metrics
-
-    Returns real-time metrics including active investigations,
-    performance statistics, and resource usage.
-    """
-    try:
-        # Get investigation data
-        from ..routes.investigations import active_investigations, investigation_history
-
-        # Calculate today's metrics
-        today = datetime.utcnow().date()
-        today_investigations = [
-            inv for inv in investigation_history
-            if inv.get('created_at', datetime.min).date() == today
-        ]
-
-        completed_today = len([
-            inv for inv in today_investigations
-            if inv.get('status') == 'completed'
-        ])
-
-        high_risk_today = len([
-            inv for inv in today_investigations
-            if inv.get('risk_level') in ['high', 'critical']
-        ])
-
-        # Calculate average investigation time for today
-        completed_today_with_times = [
-            inv for inv in today_investigations
-            if inv.get('status') == 'completed' and 'completed_at' in inv and 'created_at' in inv
-        ]
-
-        if completed_today_with_times:
-            total_time = sum([
-                (inv['completed_at'] - inv['created_at']).total_seconds()
-                for inv in completed_today_with_times
-            ])
-            avg_time = total_time / len(completed_today_with_times)
-        else:
-            avg_time = 0.0
-
-        # Get memory stats
-        await agent.memory.get_memory_stats()
-
-        failed_today = len([
-            inv for inv in today_investigations
-            if inv.get('status') == 'failed'
-        ])
-        finished_today = completed_today + failed_today
-        error_rate = (failed_today / finished_today * 100) if finished_today else 0.0
-
-        # System metrics
-        memory_usage = psutil.virtual_memory().used / (1024 * 1024)  # MB
-
-        metrics = MonitoringMetrics(
-            timestamp=datetime.utcnow(),
-            active_investigations=len(active_investigations),
-            completed_investigations_today=completed_today,
-            average_investigation_time=avg_time,
-            high_risk_events_today=high_risk_today,
-            api_response_time=None,
-            memory_usage_mb=memory_usage,
-            threat_intel_api_calls={},
-            error_rate=error_rate
-        )
-
-        # Store in history (keep last 1000 entries)
-        entry = metrics.dict()
-        entry['timestamp'] = entry['timestamp'].isoformat()
-        metrics_history.append(entry)
-        if len(metrics_history) > 1000:
-            metrics_history.pop(0)
-
-        return metrics
-
-    except Exception as e:
-        logger.error(f"Failed to get metrics: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get metrics: {str(e)}"
-        )
+    metrics = build_metrics(agent)
+    metrics_history.append(metrics.model_dump(mode="json"))
+    return metrics
 
 
 @router.get("/metrics/history")
 async def get_metrics_history(
-    hours: int = Query(24, ge=1, le=168, description="Hours of history to retrieve"),
-    resolution: str = Query("hour", description="Data resolution (minute, hour, day)")
+    hours: int = Query(24, ge=1, le=168),
+    resolution: str = Query("hour", pattern="^(minute|hour|day)$"),
 ):
-    """
-    Get historical metrics data
+    cutoff = _utcnow() - timedelta(hours=hours)
+    points = [m for m in metrics_history if datetime.fromisoformat(m["timestamp"]) >= cutoff]
 
-    Returns time-series data for charting and trend analysis.
-    """
-    try:
-        # Filter metrics by time range
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+    if resolution in ("hour", "day") and len(points) > 100:
+        buckets: Dict[datetime, List[Dict[str, Any]]] = {}
+        for m in points:
+            ts = datetime.fromisoformat(m["timestamp"])
+            key = ts.replace(minute=0, second=0, microsecond=0)
+            if resolution == "day":
+                key = key.replace(hour=0)
+            buckets.setdefault(key, []).append(m)
+        points = [{
+            "timestamp": key.isoformat(),
+            "active_investigations": _avg([m["active_investigations"] for m in group]),
+            "average_investigation_time": _avg([m["average_investigation_time"] for m in group]),
+            "api_response_time": _avg([m.get("api_response_time") for m in group]),
+            "memory_usage_mb": _avg([m["memory_usage_mb"] for m in group]),
+            "error_rate": _avg([m["error_rate"] for m in group]),
+            "data_points": len(group),
+        } for key, group in sorted(buckets.items())]
 
-        filtered_metrics = [
-            m for m in metrics_history
-            if datetime.fromisoformat(m['timestamp']) >= cutoff_time
-        ]
-
-        # Aggregate by resolution if needed
-        if resolution == "hour" and len(filtered_metrics) > 100:
-            # Group by hour and average
-            hourly_data = {}
-            for metric in filtered_metrics:
-                hour_key = datetime.fromisoformat(metric['timestamp']).replace(minute=0, second=0, microsecond=0)
-                if hour_key not in hourly_data:
-                    hourly_data[hour_key] = []
-                hourly_data[hour_key].append(metric)
-
-            aggregated_metrics = []
-            for hour, hour_metrics in hourly_data.items():
-                avg_metric = {
-                    'timestamp': hour.isoformat(),
-                    'active_investigations': sum(m['active_investigations'] for m in hour_metrics) / len(hour_metrics),
-                    'average_investigation_time': sum(m['average_investigation_time'] for m in hour_metrics) / len(hour_metrics),
-                    'api_response_time': sum(m['api_response_time'] for m in hour_metrics) / len(hour_metrics),
-                    'memory_usage_mb': sum(m['memory_usage_mb'] for m in hour_metrics) / len(hour_metrics),
-                    'error_rate': sum(m['error_rate'] for m in hour_metrics) / len(hour_metrics),
-                    'data_points': len(hour_metrics)
-                }
-                aggregated_metrics.append(avg_metric)
-
-            filtered_metrics = aggregated_metrics
-
-        return {
-            'metrics': filtered_metrics,
-            'total_points': len(filtered_metrics),
-            'time_range_hours': hours,
-            'resolution': resolution,
-            'start_time': cutoff_time.isoformat(),
-            'end_time': datetime.utcnow().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to get metrics history: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get metrics history: {str(e)}"
-        )
+    return {
+        "metrics": points,
+        "total_points": len(points),
+        "time_range_hours": hours,
+        "resolution": resolution,
+        "start_time": cutoff.isoformat(),
+        "end_time": _utcnow().isoformat(),
+    }
 
 
-# Separate router for websockets: router-level HTTP auth dependencies
-# cannot run during a websocket handshake, so this one authenticates itself
+# Separate router for websockets: HTTP auth dependencies cannot run during a
+# websocket handshake, so this endpoint authenticates itself.
 ws_router = APIRouter()
 
 
-@ws_router.websocket("/metrics/stream")
-async def metrics_websocket(websocket: WebSocket, token: str = Query("")):
-    """
-    WebSocket endpoint for real-time metrics streaming
-
-    Provides live updates of system metrics for dashboards.
-    Requires the API token as a `token` query parameter.
-    """
-    import hmac
-    from backend.config import get_settings
-
-    settings = get_settings()
-    if not token or not hmac.compare_digest(token, settings.secret_key):
+async def _authenticate_websocket(websocket: WebSocket) -> bool:
+    """Accept bearer.<token> subprotocol, ?token= query, or a first {"type":"auth"} message."""
+    subprotocol = None
+    for proto in websocket.scope.get("subprotocols", []) or []:
+        if proto.startswith("bearer."):
+            subprotocol = proto
+            if verify_token(proto[len("bearer."):]):
+                await websocket.accept(subprotocol=proto)
+                return True
+    query_token = websocket.query_params.get("token")
+    if query_token:
+        if verify_token(query_token):
+            await websocket.accept()
+            return True
         await websocket.close(code=4401)
-        return
+        return False
+    if subprotocol:
+        await websocket.close(code=4401)
+        return False
 
     await websocket.accept()
-    active_websockets.append(websocket)
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
+        message = json.loads(raw)
+    except (asyncio.TimeoutError, ValueError, WebSocketDisconnect):
+        await websocket.close(code=4401)
+        return False
+    if isinstance(message, dict) and message.get("type") == "auth":
+        token = message.get("token")
+        if verify_token(token) or (not token and get_settings().debug):
+            await websocket.send_json({"type": "auth_ok"})
+            return True
+    await websocket.close(code=4401)
+    return False
 
+
+@ws_router.websocket("/metrics/stream")
+async def metrics_websocket(websocket: WebSocket):
+    """Live metrics every few seconds. Authenticate before any data is sent."""
+    if not await _authenticate_websocket(websocket):
+        return
+    active_websockets.append(websocket)
     try:
         while True:
-            # Send current metrics every 5 seconds
-            try:
-                # Get current metrics (simplified version)
-                from ..routes.investigations import active_investigations, investigation_history
-
-                current_metrics = {
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'active_investigations': len(active_investigations),
-                    'memory_usage_mb': psutil.virtual_memory().used / (1024 * 1024),
-                    'recent_investigations': len([
-                        inv for inv in investigation_history
-                        if (datetime.utcnow() - inv.get('created_at', datetime.min)).total_seconds() < 3600
-                    ]),
-                    'websocket_connections': len(active_websockets)
-                }
-
-                await websocket.send_json(current_metrics)
-                await asyncio.sleep(5)
-
-            except WebSocketDisconnect:
-                break
-            except Exception as e:
-                logger.error(f"Error in metrics websocket: {e}")
-                break
-
+            soc_agent = deps.soc_agent
+            if soc_agent is None:
+                await websocket.send_json({"type": "error", "error": "agent unavailable"})
+            else:
+                payload = build_metrics(soc_agent).model_dump(mode="json")
+                payload.update({"type": "metrics", "websocket_connections": len(active_websockets)})
+                await websocket.send_json(payload)
+            await asyncio.sleep(WS_PUSH_INTERVAL_SECONDS)
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        logger.error(f"Metrics websocket error: {type(e).__name__}")
     finally:
         if websocket in active_websockets:
             active_websockets.remove(websocket)
@@ -241,288 +177,148 @@ async def metrics_websocket(websocket: WebSocket, token: str = Query("")):
 
 @router.get("/alerts/config", response_model=AlertConfiguration)
 async def get_alert_config():
-    """Get current alert configuration"""
     return alert_config
 
 
 @router.put("/alerts/config", response_model=AlertConfiguration)
 async def update_alert_config(config: AlertConfiguration):
-    """Update alert configuration"""
     global alert_config
     alert_config = config
-    logger.info(f"Updated alert configuration: {config.dict()}")
+    logger.info(f"Updated alert configuration: {config.model_dump(mode='json')}")
     return alert_config
 
 
 @router.get("/alerts/recent")
-async def get_recent_alerts(
-    hours: int = Query(24, ge=1, le=168, description="Hours of history to retrieve"),
-    limit: int = Query(50, le=200, description="Maximum alerts to return")
-):
-    """
-    Get recent alerts triggered by the system
-
-    Returns alerts based on current configuration and investigation results.
-    """
-    try:
-        # Get recent high-risk investigations that would trigger alerts
-        from ..routes.investigations import investigation_history
-
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
-
-        recent_alerts = []
-        for inv in investigation_history:
-            if inv.get('created_at', datetime.min) < cutoff_time:
-                continue
-
-            risk_level = inv.get('risk_level', 'low')
-            if risk_level in ['high', 'critical']:
-                alert = {
-                    'alert_id': f"alert_{inv['id']}",
-                    'investigation_id': inv['id'],
-                    'alert_type': 'high_risk_investigation',
-                    'risk_level': risk_level,
-                    'event_type': inv.get('request', {}).get('event_data', {}).get('event_type'),
-                    'source_ip': inv.get('request', {}).get('event_data', {}).get('source_ip'),
-                    'triggered_at': inv.get('completed_at', inv.get('created_at')),
-                    'status': 'triggered',
-                    'message': f"High risk {risk_level} investigation completed for {inv.get('request', {}).get('event_data', {}).get('event_type', 'unknown')} event"
-                }
-                recent_alerts.append(alert)
-
-        # Sort by trigger time (newest first)
-        recent_alerts.sort(key=lambda x: x['triggered_at'], reverse=True)
-
-        # Apply limit
-        recent_alerts = recent_alerts[:limit]
-
-        return {
-            'alerts': recent_alerts,
-            'total_count': len(recent_alerts),
-            'time_range_hours': hours,
-            'alert_config': alert_config.dict()
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to get recent alerts: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get recent alerts: {str(e)}"
-        )
+async def get_recent_alerts(hours: int = Query(24, ge=1, le=168), limit: int = Query(50, ge=1, le=200)):
+    items, _ = get_store().list(risk_levels=["high", "critical"], date_from=_utcnow() - timedelta(hours=hours),
+                                limit=limit)
+    alerts = [{
+        "alert_id": f"alert_{inv['id']}",
+        "investigation_id": inv["id"],
+        "alert_type": "prompt_injection" if inv.get("prompt_injection_detected") else "high_risk_investigation",
+        "risk_level": inv.get("risk_level"),
+        "risk_score": inv.get("risk_score"),
+        "event_type": inv.get("event_type"),
+        "source_ip": inv.get("source_ip"),
+        "triggered_at": inv.get("completed_at") or inv.get("created_at"),
+        "status": inv["status"],
+        "owasp_categories": inv.get("owasp_categories", []),
+        "message": f"{str(inv.get('risk_level')).upper()} risk {inv.get('event_type') or 'unknown'} investigation",
+    } for inv in items]
+    return {"alerts": alerts, "total_count": len(alerts), "time_range_hours": hours,
+            "alert_config": alert_config.model_dump(mode="json")}
 
 
 @router.post("/subscriptions", response_model=EventSubscription)
 async def create_subscription(subscription: EventSubscription):
-    """
-    Create a new event subscription
-
-    Subscribe to real-time notifications for specific event types or risk levels.
-    """
-    try:
-        if not subscription.subscription_id:
-            subscription.subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
-
-        subscriptions[subscription.subscription_id] = subscription
-
-        logger.info(f"Created subscription {subscription.subscription_id}")
-
-        return subscription
-
-    except Exception as e:
-        logger.error(f"Failed to create subscription: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create subscription: {str(e)}"
-        )
+    if not subscription.subscription_id:
+        subscription.subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
+    subscriptions[subscription.subscription_id] = subscription
+    return subscription
 
 
 @router.get("/subscriptions")
 async def list_subscriptions():
-    """List all active event subscriptions"""
-    return {
-        'subscriptions': list(subscriptions.values()),
-        'total_count': len(subscriptions)
-    }
+    return {"subscriptions": [s.model_dump(mode="json") for s in subscriptions.values()],
+            "total_count": len(subscriptions)}
 
 
 @router.get("/subscriptions/{subscription_id}", response_model=EventSubscription)
 async def get_subscription(subscription_id: str):
-    """Get a specific subscription by ID"""
     if subscription_id not in subscriptions:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Subscription {subscription_id} not found"
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription {subscription_id} not found")
     return subscriptions[subscription_id]
 
 
 @router.delete("/subscriptions/{subscription_id}")
 async def delete_subscription(subscription_id: str):
-    """Delete a subscription"""
     if subscription_id not in subscriptions:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Subscription {subscription_id} not found"
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Subscription {subscription_id} not found")
     del subscriptions[subscription_id]
-    logger.info(f"Deleted subscription {subscription_id}")
-
     return {"message": f"Subscription {subscription_id} deleted successfully"}
 
 
 @router.get("/system/status")
 async def get_system_status(agent: SOCAgentPlanner = Depends(get_soc_agent)):
-    """
-    Get detailed system status information
-
-    Returns system health and performance data.
-    """
-    try:
-        # System resource information; cpu_percent(interval=1) blocks for a
-        # full second, so run it in a worker thread instead of the event loop
-        cpu_percent = await asyncio.to_thread(psutil.cpu_percent, 1)
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-
-        # Agent-specific status
-        memory_stats = await agent.memory.get_memory_stats()
-        tool_capabilities = agent.tools.get_tool_capabilities()
-
-        # Investigation statistics
-        from ..routes.investigations import active_investigations, investigation_history
-
-        status_info = {
-            'system': {
-                'cpu_percent': cpu_percent,
-                'memory_percent': memory.percent,
-                'memory_used_gb': round(memory.used / (1024**3), 2),
-                'memory_total_gb': round(memory.total / (1024**3), 2),
-                'disk_used_gb': round(disk.used / (1024**3), 2),
-                'disk_total_gb': round(disk.total / (1024**3), 2),
-                'disk_percent': round((disk.used / disk.total) * 100, 1)
-            },
-            'agent': {
-                'status': 'healthy',
-                'available_tools': len(agent.tools.get_available_tools()),
-                'tool_capabilities': tool_capabilities,
-                'memory_investigations': memory_stats.get('total_investigations', 0),
-                'patterns_learned': memory_stats.get('patterns_learned', 0)
-            },
-            'investigations': {
-                'active_count': len(active_investigations),
-                'historical_count': len(investigation_history),
-                'recent_24h': len([
-                    inv for inv in investigation_history
-                    if (datetime.utcnow() - inv.get('created_at', datetime.min)).total_seconds() < 86400
-                ])
-            },
-            'monitoring': {
-                'websocket_connections': len(active_websockets),
-                'subscriptions_count': len(subscriptions),
-                'alerts_enabled': alert_config.enabled,
-                'metrics_history_points': len(metrics_history)
-            },
-            'timestamp': datetime.utcnow()
-        }
-
-        return status_info
-
-    except Exception as e:
-        logger.error(f"Failed to get system status: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get system status: {str(e)}"
-        )
+    cpu_percent = await asyncio.to_thread(psutil.cpu_percent, 1)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    memory_stats = await agent.memory.get_memory_stats()
+    store = get_store()
+    counts = store.count_by_status()
+    return {
+        "system": {
+            "cpu_percent": cpu_percent,
+            "memory_percent": memory.percent,
+            "memory_used_gb": round(memory.used / (1024 ** 3), 2),
+            "memory_total_gb": round(memory.total / (1024 ** 3), 2),
+            "process_memory_mb": _process_memory_mb(),
+            "disk_used_gb": round(disk.used / (1024 ** 3), 2),
+            "disk_total_gb": round(disk.total / (1024 ** 3), 2),
+            "disk_percent": round(disk.used / disk.total * 100, 1),
+        },
+        "agent": {
+            "status": "healthy",
+            "available_tools": len(agent.tools.get_available_tools()),
+            "tool_capabilities": agent.tools.get_tool_capabilities(),
+            "intel_tools": agent.tools.get_status(),
+            "llm": f"{agent.llm.provider_name}/{agent.llm.model}" if agent.llm else None,
+            "memory_investigations": memory_stats.get("total_investigations", 0),
+            "patterns_learned": memory_stats.get("patterns_learned", 0),
+        },
+        "investigations": {
+            "active_count": store.active_count(),
+            "status_counts": counts,
+            "historical_count": sum(counts.values()),
+            "recent_24h": store.metrics()["total"],
+        },
+        "monitoring": {
+            "websocket_connections": len(active_websockets),
+            "subscriptions_count": len(subscriptions),
+            "alerts_enabled": alert_config.enabled,
+            "metrics_history_points": len(metrics_history),
+            "api_latency": response_times.snapshot(),
+        },
+        "timestamp": _utcnow(),
+    }
 
 
 @router.post("/system/restart")
 async def restart_agent(agent: SOCAgentPlanner = Depends(get_soc_agent)):
-    """
-    Restart the SOC Agent
-
-    Reinitializes the agent with current configuration.
-    """
-    try:
-        # In a real implementation, this would restart the agent process
-        logger.info("Agent restart requested")
-
-        # For now, just return a success message
-        return {
-            'message': 'Agent restart initiated',
-            'timestamp': datetime.utcnow(),
-            'status': 'success'
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to restart agent: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to restart agent: {str(e)}"
-        )
+    """Reconnect integrations. A process restart is left to the supervisor."""
+    results = await agent.integrations.connect_all() if agent.integrations.integrations else {}
+    return {"message": "Integrations reconnected; restart the process to reload configuration",
+            "integrations": results, "timestamp": _utcnow(), "status": "success"}
 
 
 @router.get("/performance/stats")
-async def get_performance_stats():
-    """
-    Get performance statistics and benchmarks
+async def get_performance_stats(agent: SOCAgentPlanner = Depends(get_soc_agent)):
+    """Performance averages and trends. Works before any /metrics sample exists."""
+    if not metrics_history:
+        metrics_history.append(build_metrics(agent).model_dump(mode="json"))
+    recent = list(metrics_history)[-100:]
 
-    Returns detailed performance metrics and trend analysis.
-    """
-    try:
-        # Calculate performance statistics from metrics history
-        if not metrics_history:
-            return {
-                'message': 'No performance data available yet',
-                'stats': {}
-            }
+    def trend(values: List[Optional[float]]) -> float:
+        clean = [v for v in values if isinstance(v, (int, float))]
+        return round((clean[-1] - clean[0]) / len(clean), 4) if len(clean) >= 2 else 0.0
 
-        # Get last 100 metrics for statistics
-        recent_metrics = metrics_history[-100:]
-
-        # Calculate averages and trends
-        avg_investigation_time = sum(m['average_investigation_time'] for m in recent_metrics) / len(recent_metrics)
-        avg_api_response_time = sum(m['api_response_time'] for m in recent_metrics) / len(recent_metrics)
-        avg_memory_usage = sum(m['memory_usage_mb'] for m in recent_metrics) / len(recent_metrics)
-        avg_error_rate = sum(m['error_rate'] for m in recent_metrics) / len(recent_metrics)
-
-        # Calculate trends (simple slope)
-        def calculate_trend(values):
-            if len(values) < 2:
-                return 0
-            return (values[-1] - values[0]) / len(values)
-
-        investigation_times = [m['average_investigation_time'] for m in recent_metrics]
-        memory_values = [m['memory_usage_mb'] for m in recent_metrics]
-
-        performance_stats = {
-            'averages': {
-                'investigation_time_seconds': round(avg_investigation_time, 2),
-                'api_response_time_ms': round(avg_api_response_time, 2),
-                'memory_usage_mb': round(avg_memory_usage, 2),
-                'error_rate_percent': round(avg_error_rate, 2)
-            },
-            'trends': {
-                'investigation_time_trend': round(calculate_trend(investigation_times), 4),
-                'memory_usage_trend': round(calculate_trend(memory_values), 4)
-            },
-            'metrics': {
-                'sample_size': len(recent_metrics),
-                'time_range_minutes': (datetime.utcnow() - datetime.fromisoformat(recent_metrics[0]['timestamp'])).total_seconds() / 60 if recent_metrics else 0
-            },
-            'thresholds': {
-                'max_investigation_time': 300,  # 5 minutes
-                'max_memory_usage_mb': 1024,    # 1GB
-                'max_error_rate': 5.0           # 5%
-            }
-        }
-
-        return performance_stats
-
-    except Exception as e:
-        logger.error(f"Failed to get performance stats: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get performance stats: {str(e)}"
-        )
+    first_ts = datetime.fromisoformat(recent[0]["timestamp"])
+    return {
+        "averages": {
+            "investigation_time_seconds": _avg([m["average_investigation_time"] for m in recent]),
+            "api_response_time_ms": _avg([m.get("api_response_time") for m in recent]),
+            "memory_usage_mb": _avg([m["memory_usage_mb"] for m in recent]),
+            "error_rate_percent": _avg([m["error_rate"] for m in recent]),
+        },
+        "trends": {
+            "investigation_time_trend": trend([m["average_investigation_time"] for m in recent]),
+            "memory_usage_trend": trend([m["memory_usage_mb"] for m in recent]),
+        },
+        "api_latency": response_times.snapshot(),
+        "threat_intel_api_calls": dict(agent.tools.api_call_counts),
+        "metrics": {
+            "sample_size": len(recent),
+            "time_range_minutes": round((_utcnow() - first_ts).total_seconds() / 60, 2),
+        },
+        "thresholds": {"max_investigation_time": 300, "max_memory_usage_mb": 1024, "max_error_rate": 5.0},
+    }

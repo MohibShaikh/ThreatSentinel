@@ -1,546 +1,252 @@
 """
 ThreatSentinel SOC Agent - Investigation Routes
 
-API routes for managing security incident investigations.
+All state lives in the persistent InvestigationStore. Static paths
+(/bulk, /search, /reviews/pending, /batch/...) are declared before
+/{investigation_id} so they are never captured by it.
 """
 
 import logging
-from datetime import datetime, timedelta
 import time
-from typing import Dict, List, Optional, Any
+from datetime import timedelta
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..models import (
-    InvestigationRequest,
-    InvestigationResponse,
-    InvestigationStatus,
-    BulkInvestigationRequest,
-    BulkInvestigationResponse,
-    SearchRequest,
-    SearchResponse
-)
 from agent import SOCAgentPlanner
-from backend.deps import get_current_user, get_soc_agent
 
+from ..deps import get_current_user, get_soc_agent, get_store, running_investigations
+from ..models import (AnalystFeedback, BulkInvestigationRequest, BulkInvestigationResponse, InvestigationRequest,
+                      InvestigationResponse, InvestigationStatus, ReviewStatus, SearchRequest, SearchResponse)
+from ..runner import new_investigation_id, start_investigation
+from ..store import ACTIVE_STATUSES, utcnow
 
-# Create router
-router = APIRouter(dependencies=[Depends(get_current_user)], )
-
-# Global storage for investigations (in production, use proper database)
-active_investigations: Dict[str, Any] = {}
-investigation_history: List[Dict[str, Any]] = []
-
+router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
 
+def _summary(inv: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "investigation_id": inv["id"],
+        "id": inv["id"],
+        "title": inv.get("title"),
+        "status": inv["status"],
+        "created_at": inv["created_at"],
+        "completed_at": inv.get("completed_at"),
+        "event_type": inv.get("event_type"),
+        "source_ip": inv.get("source_ip"),
+        "risk_level": inv.get("risk_level"),
+        "risk_score": inv.get("risk_score"),
+        "emergency_mode": inv.get("emergency_mode", False),
+        "progress": inv.get("progress", 0),
+        "current_phase": inv.get("current_phase") or "unknown",
+        "batch_id": inv.get("batch_id"),
+        "review_status": inv.get("review_status"),
+        "owasp_categories": inv.get("owasp_categories", []),
+        "mitre_techniques": inv.get("mitre_techniques", []),
+        "prompt_injection_detected": inv.get("prompt_injection_detected", False),
+    }
+
+
+def _get_or_404(investigation_id: str) -> Dict[str, Any]:
+    record = get_store().get(investigation_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Investigation {investigation_id} not found")
+    return record
+
+
 @router.post("/", response_model=InvestigationResponse, status_code=status.HTTP_201_CREATED)
-async def create_investigation(
-    request: InvestigationRequest,
-    background_tasks: BackgroundTasks,
-    agent: SOCAgentPlanner = Depends(get_soc_agent)
+async def create_investigation(request: InvestigationRequest, agent: SOCAgentPlanner = Depends(get_soc_agent)):
+    """Submit a security event for asynchronous investigation."""
+    store = get_store()
+    investigation_id = new_investigation_id()
+    store.create(investigation_id, request.model_dump())
+    start_investigation(investigation_id, request.event_data, request.emergency_mode)
+    logger.info(f"Created investigation {investigation_id}")
+    return InvestigationResponse(
+        investigation_id=investigation_id,
+        status="created",
+        message="Investigation created and queued for processing",
+        estimated_completion_time=utcnow() + timedelta(minutes=2 if request.emergency_mode else 5),
+        priority="emergency" if request.emergency_mode else "normal",
+    )
+
+
+@router.post("/bulk", response_model=BulkInvestigationResponse)
+async def create_bulk_investigations(request: BulkInvestigationRequest,
+                                     agent: SOCAgentPlanner = Depends(get_soc_agent)):
+    store = get_store()
+    batch_id = request.batch_id or f"batch_{new_investigation_id()[4:]}"
+    ids = []
+    for event_data in request.events:
+        investigation_id = new_investigation_id()
+        store.create(investigation_id, {"event_data": event_data, "emergency_mode": request.emergency_mode,
+                                        "batch_id": batch_id}, batch_id=batch_id)
+        start_investigation(investigation_id, event_data, request.emergency_mode)
+        ids.append(investigation_id)
+    return BulkInvestigationResponse(
+        batch_id=batch_id,
+        total_events=len(request.events),
+        investigation_ids=ids,
+        estimated_completion_time=utcnow() + timedelta(minutes=3 if request.emergency_mode else 7),
+        status="created",
+    )
+
+
+@router.post("/search", response_model=SearchResponse)
+async def search_investigations(request: SearchRequest):
+    started = time.perf_counter()
+    items, total = get_store().list(
+        event_types=[e.value for e in request.event_types] if request.event_types else None,
+        risk_levels=[r.value for r in request.risk_levels] if request.risk_levels else None,
+        date_from=request.date_from, date_to=request.date_to, source_ip=request.source_ip,
+        query=request.query, limit=request.limit, offset=request.offset,
+    )
+    return SearchResponse(
+        total_results=total,
+        results=[_summary(i) for i in items],
+        query_time_ms=round((time.perf_counter() - started) * 1000, 3),
+        has_more=request.offset + len(items) < total,
+    )
+
+
+@router.get("/reviews/pending")
+async def list_pending_reviews(limit: int = Query(100, ge=1, le=500)):
+    """Escalated investigations waiting for an analyst decision."""
+    items = get_store().pending_reviews(limit=limit)
+    reviews = []
+    for inv in items:
+        result = inv.get("result") or {}
+        review = result.get("review_request") or {}
+        reviews.append({
+            **_summary(inv),
+            "priority": review.get("priority", "medium"),
+            "triggers": review.get("triggers", []),
+            "reason": review.get("reason"),
+            "confidence_score": review.get("confidence_score"),
+            "proposed_actions": result.get("proposed_actions", []),
+        })
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    reviews.sort(key=lambda r: (rank.get(r["priority"], 9), -(r.get("risk_score") or 0)))
+    return {"reviews": reviews, "total_count": len(reviews)}
+
+
+@router.get("/batch/{batch_id}")
+async def get_batch_status(batch_id: str):
+    items, total = get_store().list(batch_id=batch_id, limit=1000)
+    if not total:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Batch {batch_id} not found")
+    counts: Dict[str, int] = {}
+    for inv in items:
+        counts[inv["status"]] = counts.get(inv["status"], 0) + 1
+    finished = sum(v for k, v in counts.items() if k not in ACTIVE_STATUSES)
+    if finished == total:
+        batch_status = "completed"
+    elif counts.get("failed") or counts.get("cancelled"):
+        batch_status = "partial"
+    else:
+        batch_status = "running"
+    return {
+        "batch_id": batch_id,
+        "total_investigations": total,
+        "status_counts": counts,
+        "overall_progress": round(finished / total * 100, 1),
+        "batch_status": batch_status,
+        "investigation_ids": [i["id"] for i in items],
+    }
+
+
+@router.get("/")
+async def list_investigations(
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
-    """
-    Create a new security incident investigation
-
-    Submits a security event for autonomous investigation by the SOC Agent.
-    The investigation runs asynchronously and results can be retrieved using
-    the returned investigation ID.
-    """
-    try:
-        # Generate unique investigation ID
-        investigation_id = f"inv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(request.event_data)) % 10000}"
-
-        # Estimate completion time based on emergency mode
-        completion_minutes = 2 if request.emergency_mode else 5
-        estimated_completion = datetime.utcnow() + timedelta(minutes=completion_minutes)
-
-        # Store investigation request
-        investigation_record = {
-            'id': investigation_id,
-            'status': 'pending',
-            'created_at': datetime.utcnow(),
-            'request': request.dict(),
-            'estimated_completion': estimated_completion,
-            'progress': 0,
-            'current_phase': 'queued'
-        }
-
-        active_investigations[investigation_id] = investigation_record
-
-        # Start investigation in background
-        background_tasks.add_task(
-            run_investigation_task,
-            investigation_id,
-            request.event_data,
-            request.emergency_mode
-        )
-
-        logger.info(f"Created investigation {investigation_id}")
-
-        return InvestigationResponse(
-            investigation_id=investigation_id,
-            status="created",
-            message="Investigation created and queued for processing",
-            estimated_completion_time=estimated_completion,
-            priority="emergency" if request.emergency_mode else "normal"
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to create investigation: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create investigation: {str(e)}"
-        )
+    items, total = get_store().list(status=status_filter, limit=limit, offset=offset)
+    return {
+        "investigations": [_summary(i) for i in items],
+        "total_count": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }
 
 
 @router.get("/{investigation_id}", response_model=InvestigationStatus)
 async def get_investigation_status(investigation_id: str):
-    """
-    Get the current status of an investigation
-
-    Returns detailed status information including current phase,
-    progress percentage, and preliminary findings.
-    """
-    if investigation_id not in active_investigations:
-        # Check if it's in history
-        historical = next(
-            (inv for inv in investigation_history if inv['id'] == investigation_id),
-            None
-        )
-        if historical:
-            return InvestigationStatus(
-                investigation_id=investigation_id,
-                status=historical['status'],
-                start_time=historical['created_at'],
-                current_phase='completed',
-                progress_percentage=100,
-                estimated_time_remaining=0,
-                preliminary_risk_level=historical.get('risk_level', 'unknown')
-            )
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Investigation {investigation_id} not found"
-        )
-
-    investigation = active_investigations[investigation_id]
-
-    # Calculate estimated time remaining
-    if investigation['status'] in ['completed', 'failed']:
-        time_remaining = 0
+    inv = _get_or_404(investigation_id)
+    if inv["status"] in ACTIVE_STATUSES:
+        elapsed = (utcnow() - inv["created_at"]).total_seconds()
+        remaining = max(0, int((120 if inv.get("emergency_mode") else 300) - elapsed))
     else:
-        elapsed = (datetime.utcnow() - investigation['created_at']).total_seconds()
-        estimated_total = 300 if not investigation['request'].get('emergency_mode') else 120
-        time_remaining = max(0, estimated_total - elapsed)
-
+        remaining = 0
     return InvestigationStatus(
         investigation_id=investigation_id,
-        status=investigation['status'],
-        start_time=investigation['created_at'],
-        current_phase=investigation.get('current_phase', 'unknown'),
-        progress_percentage=investigation.get('progress', 0),
-        estimated_time_remaining=int(time_remaining),
-        preliminary_risk_level=investigation.get('preliminary_risk_level', 'unknown')
+        status=inv["status"],
+        start_time=inv["created_at"],
+        current_phase=inv.get("current_phase") or "unknown",
+        progress_percentage=int(inv.get("progress") or 0),
+        estimated_time_remaining=remaining,
+        preliminary_risk_level=inv.get("risk_level") or "unknown",
     )
 
 
 @router.get("/{investigation_id}/result")
 async def get_investigation_result(investigation_id: str):
-    """
-    Get the complete result of a finished investigation
+    inv = _get_or_404(investigation_id)
+    if inv["status"] not in ("completed", "pending_human_review"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Investigation not completed. Current status: {inv['status']}")
+    return {**(inv.get("result") or {}), "status": inv["status"], "review_status": inv.get("review_status"),
+            "feedback": inv.get("feedback")}
 
-    Returns the full investigation report including risk assessment,
-    threat intelligence findings, and recommended actions.
-    """
-    # Check active investigations first
-    if investigation_id in active_investigations:
-        investigation = active_investigations[investigation_id]
-        if investigation['status'] != 'completed':
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Investigation not completed. Current status: {investigation['status']}"
-            )
-        return investigation.get('result', {})
 
-    # Check historical investigations
-    historical = next(
-        (inv for inv in investigation_history if inv['id'] == investigation_id),
-        None
-    )
-    if historical:
-        return historical.get('result', {})
+@router.post("/{investigation_id}/feedback")
+async def submit_feedback(investigation_id: str, feedback: AnalystFeedback,
+                          agent: SOCAgentPlanner = Depends(get_soc_agent),
+                          user: Dict[str, Any] = Depends(get_current_user)):
+    """Record an analyst decision; on approval optionally execute the proposed actions."""
+    store = get_store()
+    inv = _get_or_404(investigation_id)
+    if inv["status"] in ACTIVE_STATUSES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Investigation is still running")
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Investigation {investigation_id} not found"
-    )
+    payload = feedback.model_dump(mode="json")
+    payload["investigation_id"] = investigation_id
+    learning = await agent.process_analyst_feedback(investigation_id, payload)
+
+    execution = None
+    if feedback.review_status == ReviewStatus.APPROVED and feedback.execute_actions and not feedback.false_positive:
+        execution = await agent.execute_approved_actions(inv.get("result") or {})
+
+    new_status = inv["status"]
+    if inv["status"] == "pending_human_review" and feedback.review_status in (
+            ReviewStatus.APPROVED, ReviewStatus.REJECTED):
+        new_status = "completed"
+    store.update(investigation_id, review_status=feedback.review_status.value,
+                 feedback={**payload, "submitted_by": user.get("user_id"), "execution": execution},
+                 status=new_status)
+    return {
+        "investigation_id": investigation_id,
+        "status": new_status,
+        "review_status": feedback.review_status.value,
+        "learning": learning,
+        "execution": execution,
+    }
 
 
 @router.delete("/{investigation_id}")
 async def cancel_investigation(investigation_id: str):
-    """
-    Cancel an ongoing investigation
-
-    Cancels an investigation that is currently running or queued.
-    Completed investigations cannot be cancelled.
-    """
-    if investigation_id not in active_investigations:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Investigation {investigation_id} not found"
-        )
-
-    investigation = active_investigations[investigation_id]
-
-    if investigation['status'] in ['completed', 'failed']:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot cancel investigation with status: {investigation['status']}"
-        )
-
-    # Mark as cancelled
-    investigation['status'] = 'cancelled'
-    investigation['cancelled_at'] = datetime.utcnow()
-    investigation['current_phase'] = 'cancelled'
-
+    store = get_store()
+    inv = _get_or_404(investigation_id)
+    if inv["status"] not in ACTIVE_STATUSES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Cannot cancel investigation with status: {inv['status']}")
+    store.update_if_status(investigation_id, ACTIVE_STATUSES, status="cancelled",
+                           completed_at=utcnow(), current_phase="cancelled")
+    task = running_investigations.get(investigation_id)
+    if task is not None and not task.done():
+        task.cancel()
     logger.info(f"Cancelled investigation {investigation_id}")
-
-    return {"message": f"Investigation {investigation_id} cancelled successfully"}
-
-
-@router.post("/bulk", response_model=BulkInvestigationResponse)
-async def create_bulk_investigations(
-    request: BulkInvestigationRequest,
-    background_tasks: BackgroundTasks,
-    agent: SOCAgentPlanner = Depends(get_soc_agent)
-):
-    """
-    Create multiple investigations from a batch of events
-
-    Efficiently processes multiple security events in parallel,
-    with optional batch tracking and emergency mode support.
-    """
-    try:
-        # Generate batch ID if not provided
-        batch_id = request.batch_id or f"batch_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-
-        investigation_ids = []
-
-        # Create investigations for each event
-        for i, event_data in enumerate(request.events):
-            investigation_id = f"inv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{i:03d}"
-
-            # Create investigation record
-            investigation_record = {
-                'id': investigation_id,
-                'status': 'pending',
-                'created_at': datetime.utcnow(),
-                'request': {
-                    'event_data': event_data,
-                    'emergency_mode': request.emergency_mode,
-                    'batch_id': batch_id
-                },
-                'progress': 0,
-                'current_phase': 'queued',
-                'batch_id': batch_id
-            }
-
-            active_investigations[investigation_id] = investigation_record
-            investigation_ids.append(investigation_id)
-
-            # Start investigation in background
-            background_tasks.add_task(
-                run_investigation_task,
-                investigation_id,
-                event_data,
-                request.emergency_mode
-            )
-
-        # Estimate completion time for the batch
-        completion_minutes = 3 if request.emergency_mode else 7
-        estimated_completion = datetime.utcnow() + timedelta(minutes=completion_minutes)
-
-        logger.info(f"Created bulk investigation batch {batch_id} with {len(investigation_ids)} investigations")
-
-        return BulkInvestigationResponse(
-            batch_id=batch_id,
-            total_events=len(request.events),
-            investigation_ids=investigation_ids,
-            estimated_completion_time=estimated_completion,
-            status="created"
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to create bulk investigations: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create bulk investigations: {str(e)}"
-        )
-
-
-@router.get("/batch/{batch_id}")
-async def get_batch_status(batch_id: str):
-    """
-    Get the status of a batch investigation
-
-    Returns aggregated status information for all investigations
-    in the specified batch.
-    """
-    # Find all investigations for this batch
-    batch_investigations = {
-        inv_id: inv for inv_id, inv in active_investigations.items()
-        if inv.get('batch_id') == batch_id
-    }
-
-    # Also check historical investigations
-    historical_batch = [
-        inv for inv in investigation_history
-        if inv.get('batch_id') == batch_id
-    ]
-
-    if not batch_investigations and not historical_batch:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Batch {batch_id} not found"
-        )
-
-    # Calculate batch statistics
-    all_investigations = list(batch_investigations.values()) + historical_batch
-    total_count = len(all_investigations)
-
-    status_counts = {}
-    for inv in all_investigations:
-        inv_status = inv['status']
-        status_counts[inv_status] = status_counts.get(inv_status, 0) + 1
-
-    # Calculate overall progress
-    completed = status_counts.get('completed', 0)
-    failed = status_counts.get('failed', 0)
-    cancelled = status_counts.get('cancelled', 0)
-    finished = completed + failed + cancelled
-
-    overall_progress = (finished / total_count * 100) if total_count > 0 else 0
-
-    # Determine batch status
-    if finished == total_count:
-        batch_status = 'completed'
-    elif failed > 0 or cancelled > 0:
-        batch_status = 'partial'
-    else:
-        batch_status = 'running'
-
-    return {
-        'batch_id': batch_id,
-        'total_investigations': total_count,
-        'status_counts': status_counts,
-        'overall_progress': round(overall_progress, 1),
-        'batch_status': batch_status,
-        'investigation_ids': [inv['id'] for inv in all_investigations]
-    }
-
-
-@router.post("/search", response_model=SearchResponse)
-async def search_investigations(request: SearchRequest):
-    """
-    Search through historical investigations
-
-    Provides flexible search capabilities across investigation history
-    with filtering by event type, risk level, dates, and free text.
-    """
-    try:
-        # Combine active and historical investigations
-        all_investigations = list(active_investigations.values()) + investigation_history
-
-        # Apply filters
-        filtered_results = []
-
-        for inv in all_investigations:
-            # Skip if doesn't match filters
-            if request.event_types:
-                event_type = inv.get('request', {}).get('event_data', {}).get('event_type')
-                if event_type not in [et.value for et in request.event_types]:
-                    continue
-
-            if request.risk_levels:
-                risk_level = inv.get('risk_level', 'unknown')
-                if risk_level not in [rl.value for rl in request.risk_levels]:
-                    continue
-
-            if request.date_from:
-                if inv.get('created_at', datetime.min) < request.date_from:
-                    continue
-
-            if request.date_to:
-                if inv.get('created_at', datetime.max) > request.date_to:
-                    continue
-
-            if request.source_ip:
-                source_ip = inv.get('request', {}).get('event_data', {}).get('source_ip')
-                if source_ip != request.source_ip:
-                    continue
-
-            # Free text search (simple implementation)
-            if request.query:
-                search_text = f"{inv.get('id', '')} {inv.get('status', '')} {inv.get('request', {})}"
-                if request.query.lower() not in search_text.lower():
-                    continue
-
-            filtered_results.append(inv)
-
-        # Sort by creation time (newest first)
-        filtered_results.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-
-        # Apply pagination
-        total_results = len(filtered_results)
-        start_idx = request.offset
-        end_idx = start_idx + request.limit
-        paginated_results = filtered_results[start_idx:end_idx]
-
-        # Format results for response
-        search_started = time.perf_counter()
-        formatted_results = []
-        for inv in paginated_results:
-            formatted_results.append({
-                'investigation_id': inv['id'],
-                'status': inv['status'],
-                'created_at': inv['created_at'],
-                'event_type': inv.get('request', {}).get('event_data', {}).get('event_type'),
-                'risk_level': inv.get('risk_level', 'unknown'),
-                'source_ip': inv.get('request', {}).get('event_data', {}).get('source_ip')
-            })
-
-        return SearchResponse(
-            total_results=total_results,
-            results=formatted_results,
-            query_time_ms=(time.perf_counter() - search_started) * 1000,
-            has_more=end_idx < total_results
-        )
-
-    except Exception as e:
-        logger.error(f"Search failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
-        )
-
-
-@router.get("/")
-async def list_investigations(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    limit: int = Query(50, le=200, description="Maximum results to return"),
-    offset: int = Query(0, description="Results offset")
-):
-    """
-    List recent investigations with optional filtering
-
-    Returns a paginated list of investigations with basic information.
-    """
-    # Combine active and historical investigations
-    all_investigations = list(active_investigations.values()) + investigation_history
-
-    # Apply status filter if provided
-    if status:
-        all_investigations = [inv for inv in all_investigations if inv.get('status') == status]
-
-    # Sort by creation time (newest first)
-    all_investigations.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-
-    # Apply pagination
-    total_count = len(all_investigations)
-    paginated = all_investigations[offset:offset + limit]
-
-    # Format for response
-    formatted_investigations = []
-    for inv in paginated:
-        formatted_investigations.append({
-            'investigation_id': inv['id'],
-            'status': inv['status'],
-            'created_at': inv['created_at'],
-            'event_type': inv.get('request', {}).get('event_data', {}).get('event_type'),
-            'emergency_mode': inv.get('request', {}).get('emergency_mode', False),
-            'progress': inv.get('progress', 0),
-            'current_phase': inv.get('current_phase', 'unknown')
-        })
-
-    return {
-        'investigations': formatted_investigations,
-        'total_count': total_count,
-        'limit': limit,
-        'offset': offset,
-        'has_more': offset + limit < total_count
-    }
-
-
-async def run_investigation_task(investigation_id: str, event_data: Dict[str, Any], emergency_mode: bool = False):
-    """
-    Background task to run the actual investigation
-
-    This function executes the SOC Agent investigation pipeline
-    and updates the investigation status throughout the process.
-    """
-    try:
-        if investigation_id not in active_investigations:
-            logger.error(f"Investigation {investigation_id} not found in active investigations")
-            return
-
-        investigation = active_investigations[investigation_id]
-
-        # Update status to running
-        investigation.update({
-            'status': 'running',
-            'started_at': datetime.utcnow(),
-            'current_phase': 'initial_assessment',
-            'progress': 10
-        })
-
-        logger.info(f"Starting investigation {investigation_id}")
-
-        # Get SOC agent
-        from backend import deps
-        if deps.soc_agent is None:
-            raise Exception("SOC Agent not available")
-
-        # Run the investigation
-        result = await deps.soc_agent.investigate_incident(event_data, emergency_mode, investigation_id=investigation_id)
-
-        # Update with results
-        investigation.update({
-            'status': 'completed',
-            'completed_at': datetime.utcnow(),
-            'result': result,
-            'current_phase': 'completed',
-            'progress': 100,
-            'risk_level': result.get('risk_assessment', {}).get('risk_level', 'unknown'),
-            'preliminary_risk_level': result.get('risk_assessment', {}).get('risk_level', 'unknown')
-        })
-
-        # Move to history and clean up active investigations
-        investigation_history.append(investigation.copy())
-
-        # Keep active investigations list manageable
-        if len(active_investigations) > 100:
-            # Move oldest completed investigations to history
-            completed_ids = [
-                inv_id for inv_id, inv in active_investigations.items()
-                if inv['status'] in ['completed', 'failed', 'cancelled']
-            ]
-            completed_ids.sort(key=lambda x: active_investigations[x].get('completed_at', datetime.min))
-
-            for inv_id in completed_ids[:50]:  # Move oldest 50
-                if inv_id in active_investigations:
-                    del active_investigations[inv_id]
-
-        logger.info(f"Investigation {investigation_id} completed successfully")
-
-    except Exception as e:
-        logger.error(f"Investigation {investigation_id} failed: {e}")
-
-        if investigation_id in active_investigations:
-            active_investigations[investigation_id].update({
-                'status': 'failed',
-                'failed_at': datetime.utcnow(),
-                'error': str(e),
-                'current_phase': 'failed',
-                'progress': 0
-            })
+    return {"message": f"Investigation {investigation_id} cancelled successfully", "status": "cancelled"}

@@ -1,121 +1,152 @@
 """
 ThreatSentinel SOC Agent Backend - FastAPI Main Application
 
-REST API server providing web-based access to SOC Agent functionality
-including incident investigation, report retrieval, and real-time monitoring.
+REST API providing investigation, reporting, monitoring, integrations, task
+queue and audit endpoints over the SOC agent.
 """
 
-import logging
 import json
+import logging
 import os
-from datetime import datetime
-from typing import Dict, Any
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import uvicorn
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .config import get_settings
+from agent import SOCAgentPlanner, TaskQueue
+
 from . import deps
-from .deps import get_current_user, get_soc_agent
-from .models import (
-    InvestigationRequest,
-    InvestigationResponse,
-    InvestigationStatus,
-    HealthResponse,
-    AgentStatsResponse
-)
-from .routes import investigations, reports, monitoring, integrations, tasks, audit
-from agent import SOCAgentPlanner
+from .config import Settings, get_settings
+from .deps import get_current_user, get_soc_agent, get_store
+from .middleware import RateLimitMiddleware, RequestTimingMiddleware, SecurityHeadersMiddleware
+from .models import (AgentStatsResponse, HealthResponse, InvestigationRequest, InvestigationResponse,
+                     InvestigationStatus)
+from .routes import audit, integrations, investigations, monitoring, reports, tasks
+from .runner import investigation_task_handler, new_investigation_id, reset_limiter, start_investigation
+from .store import InvestigationStore
+
+logger = logging.getLogger(__name__)
+API_VERSION = "2.1.0"
 
 
-# Global agent instance
-active_investigations: Dict[str, Any] = {}
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def build_agent_config(settings: Settings) -> Dict[str, Any]:
+    try:
+        integrations_config = json.loads(settings.integrations_config or "{}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid INTEGRATIONS_CONFIG JSON: {e}") from e
+
+    llm_config: Dict[str, Any] = {}
+    if settings.llm_provider:
+        llm_config = {
+            "provider": settings.llm_provider,
+            "api_key": settings.llm_api_key,
+            "model": settings.llm_model,
+            "base_url": settings.llm_base_url,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+            "redact_secrets": settings.llm_redact_secrets,
+        }
+        llm_config = {k: v for k, v in llm_config.items() if v is not None}
+
+    return {
+        "api_keys": {
+            "virustotal": settings.virustotal_api_key,
+            "abuseipdb": settings.abuseipdb_api_key,
+            "urlvoid": settings.urlvoid_api_key,
+            "shodan": settings.shodan_api_key,
+        },
+        "enable_keyless_intel": settings.enable_keyless_intel,
+        "memory": {"memory_dir": settings.memory_dir},
+        "reporting": {"reports_dir": settings.reports_dir, "auto_save": settings.auto_save_reports},
+        "llm": llm_config,
+        "integrations_config": integrations_config,
+        "audit": {"db_path": os.path.join(settings.data_dir, "action_logs.db")},
+        "confidence_threshold": settings.confidence_threshold,
+        "emergency_threshold": settings.emergency_threshold,
+        "max_investigation_time": settings.max_investigation_time,
+        "llm_max_tool_steps": settings.llm_max_tool_steps,
+    }
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI lifespan context manager for startup/shutdown"""
-    # Startup
     settings = get_settings()
+    settings.validate_security_posture()
+    if settings.debug:
+        for problem in settings.security_posture_errors():
+            logger.warning(f"DEBUG mode with insecure setting: {problem}")
+
+    deps.soc_agent = SOCAgentPlanner(build_agent_config(settings))
+    deps.investigation_store = InvestigationStore(os.path.join(settings.data_dir, "investigations.db"))
+    interrupted = deps.investigation_store.mark_interrupted()
+    if interrupted:
+        logger.warning(f"Marked {interrupted} interrupted investigations as failed")
+    reset_limiter()
+
+    if deps.soc_agent.integrations.integrations:
+        try:
+            results = await deps.soc_agent.integrations.connect_all()
+            logger.info(f"Integrations connected: {results}")
+        except Exception as e:  # an unreachable integration must not stop the API
+            logger.error(f"Integration startup failed: {type(e).__name__}: {e}")
+
+    queue = TaskQueue(db_path=os.path.join(settings.data_dir, "tasks.db"),
+                      max_workers=max(1, settings.task_queue_workers))
+    queue.register_handler("investigation", investigation_task_handler)
+    deps.task_queue = queue
+    await queue.start()
+    logger.info("SOC Agent backend started")
 
     try:
-        # Initialize SOC Agent
-        llm_config = {}
-        if settings.llm_api_key:
-            llm_config = {
-                'provider': settings.llm_provider,
-                'api_key': settings.llm_api_key,
-                'model': settings.llm_model,
-                'temperature': settings.llm_temperature,
-                'max_tokens': settings.llm_max_tokens,
-            }
-
+        yield
+    finally:
+        logger.info("Shutting down SOC Agent backend")
+        await queue.stop()
+        for task in list(deps.running_investigations.values()):
+            task.cancel()
         try:
-            integrations_config = json.loads(settings.integrations_config)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid INTEGRATIONS_CONFIG JSON: {e}") from e
-
-        agent_config = {
-            'api_keys': {
-                'virustotal': settings.virustotal_api_key,
-                'abuseipdb': settings.abuseipdb_api_key,
-                'urlvoid': settings.urlvoid_api_key,
-                'shodan': settings.shodan_api_key
-            },
-            'memory': {
-                'memory_dir': settings.memory_dir
-            },
-            'reporting': {
-                'reports_dir': settings.reports_dir,
-                'auto_save': True
-            },
-            'llm': llm_config,
-            'integrations_config': integrations_config,
-            'audit': {
-                'db_path': os.path.join(settings.data_dir, 'action_logs.db')
-            },
-            'confidence_threshold': settings.confidence_threshold,
-            'emergency_threshold': settings.emergency_threshold,
-            'max_investigation_time': settings.max_investigation_time
-        }
-
-        deps.soc_agent = SOCAgentPlanner(agent_config)
-        logging.info("SOC Agent initialized successfully")
-
-    except Exception as e:
-        logging.error(f"Failed to initialize SOC Agent: {e}")
-        raise
-
-    yield
-
-    # Shutdown
-    logging.info("Shutting down SOC Agent backend")
+            await deps.soc_agent.integrations.disconnect_all()
+        except Exception as e:
+            logger.error(f"Integration shutdown failed: {type(e).__name__}")
+        deps.task_queue = None
 
 
-# Create FastAPI app
+def _cors_origins(settings: Settings):
+    # A wildcard with credentials would let any site act as the user
+    return [o for o in settings.cors_origins if o != "*"]
+
+
 app = FastAPI(
     title="ThreatSentinel SOC Agent API",
     description="Autonomous Security Operations Center Agent API",
-    version="2.0.0",
+    version=API_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# CORS middleware
+# Order: last added runs first. Timing wraps everything, then security headers,
+# then rate limiting, then CORS closest to the routes.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_settings().cors_origins,
+    allow_origins=_cors_origins(get_settings()),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+app.add_middleware(RateLimitMiddleware, settings_provider=get_settings)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestTimingMiddleware)
 
-
-# Include routers
 app.include_router(investigations.router, prefix="/api/v1/investigations", tags=["Investigations"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(monitoring.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
@@ -127,234 +158,129 @@ app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
 @app.get("/", response_model=Dict[str, str])
 async def root():
-    """Root endpoint"""
-    return {
-        "message": "ThreatSentinel SOC Agent API",
-        "version": "2.0.0",
-        "documentation": "/docs",
-        "health": "/health"
-    }
+    return {"message": "ThreatSentinel SOC Agent API", "version": API_VERSION,
+            "documentation": "/docs", "health": "/health"}
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health_check(agent: SOCAgentPlanner = Depends(get_soc_agent)):
-    """Health check endpoint"""
-    try:
-        # Check agent status
-        agent_status = "healthy"
-
-        # Get basic stats
-        tool_count = len(agent.tools.get_available_tools())
-        memory_stats = await agent.memory.get_memory_stats()
-
-        return HealthResponse(
-            status="healthy",
-            timestamp=datetime.utcnow(),
-            version="2.0.0",
-            agent_status=agent_status,
-            available_tools=tool_count,
-            memory_investigations=memory_stats.get('total_investigations', 0),
-            active_investigations=len(active_investigations)
-        )
-
-    except Exception as e:
-        logging.error(f"Health check failed: {e}")
-        return HealthResponse(
-            status="unhealthy",
-            timestamp=datetime.utcnow(),
-            version="2.0.0",
-            agent_status="error",
-            error=str(e)
-        )
-
-
-@app.get("/api/v1/stats", response_model=AgentStatsResponse)
-async def get_agent_stats(agent: SOCAgentPlanner = Depends(get_soc_agent)):
-    """Get detailed agent statistics"""
-    try:
-        memory_stats = await agent.memory.get_memory_stats()
-        tool_capabilities = agent.tools.get_tool_capabilities()
-
-        return AgentStatsResponse(
-            memory_stats=memory_stats,
-            tool_capabilities=tool_capabilities,
-            active_investigations=len(active_investigations),
-            investigation_history=memory_stats.get('by_event_type', {}),
-            risk_distribution=memory_stats.get('by_risk_level', {}),
-            avg_investigation_time=memory_stats.get('avg_investigation_duration_seconds', 0.0)
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get agent stats: {str(e)}"
-        )
-
-
-@app.post("/api/v1/investigate", response_model=InvestigationResponse)
-async def investigate_event(
-    request: InvestigationRequest,
-    background_tasks: BackgroundTasks,
-    agent: SOCAgentPlanner = Depends(get_soc_agent),
-    current_user = Depends(get_current_user)
-):
-    """
-    Submit a security event for investigation
-
-    This endpoint accepts security event data and triggers an autonomous
-    investigation using the SOC Agent's analysis pipeline.
-    """
-    try:
-        # Generate investigation ID
-        investigation_id = f"inv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(request.event_data)) % 10000}"
-
-        # Store investigation request
-        active_investigations[investigation_id] = {
-            'id': investigation_id,
-            'status': 'in_progress',
-            'start_time': datetime.utcnow(),
-            'request': request,
-            'user': current_user
-        }
-
-        # Start investigation in background
-        background_tasks.add_task(
-            run_investigation,
-            investigation_id,
-            request.event_data,
-            request.emergency_mode
-        )
-
-        return InvestigationResponse(
-            investigation_id=investigation_id,
-            status="started",
-            message="Investigation started successfully",
-            estimated_completion_time=datetime.utcnow(),
-            priority="emergency" if request.emergency_mode else "normal"
-        )
-
-    except Exception as e:
-        logging.error(f"Investigation request failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start investigation: {str(e)}"
-        )
-
-
-@app.get("/api/v1/investigate/{investigation_id}/status", response_model=InvestigationStatus)
-async def get_investigation_status(investigation_id: str):
-    """Get the status of an ongoing investigation"""
-    if investigation_id not in active_investigations:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Investigation not found"
-        )
-
-    investigation = active_investigations[investigation_id]
-
-    return InvestigationStatus(
-        investigation_id=investigation_id,
-        status=investigation['status'],
-        start_time=investigation['start_time'],
-        current_phase=investigation.get('current_phase', 'unknown'),
-        progress_percentage=investigation.get('progress', 0),
-        estimated_time_remaining=investigation.get('eta', 0),
-        preliminary_risk_level=investigation.get('preliminary_risk', 'unknown')
+async def health_check():
+    """Unauthenticated liveness probe. Reveals no configuration or error detail."""
+    healthy = deps.soc_agent is not None and deps.investigation_store is not None
+    return HealthResponse(
+        status="healthy" if healthy else "unhealthy",
+        timestamp=_utcnow(),
+        version=API_VERSION,
+        agent_status="ready" if healthy else "unavailable",
     )
 
 
-@app.get("/api/v1/investigate/{investigation_id}/result")
-async def get_investigation_result(investigation_id: str):
-    """Get the complete result of a finished investigation"""
-    if investigation_id not in active_investigations:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Investigation not found"
-        )
-
-    investigation = active_investigations[investigation_id]
-
-    if investigation['status'] != 'completed':
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Investigation not completed. Current status: {investigation['status']}"
-        )
-
-    return investigation.get('result', {})
-
-
-async def run_investigation(investigation_id: str, event_data: Dict[str, Any], emergency_mode: bool = False):
-    """Background task to run the investigation"""
-    global active_investigations
-
+@app.get("/api/v1/stats", response_model=AgentStatsResponse, dependencies=[Depends(get_current_user)])
+async def get_agent_stats(agent: SOCAgentPlanner = Depends(get_soc_agent)):
+    store = get_store()
     try:
-        # Update status
-        active_investigations[investigation_id]['status'] = 'running'
-        active_investigations[investigation_id]['current_phase'] = 'initial_assessment'
-
-        # Run investigation
-        result = await deps.soc_agent.investigate_incident(event_data, emergency_mode, investigation_id=investigation_id)
-
-        # Update with results
-        active_investigations[investigation_id].update({
-            'status': 'completed',
-            'end_time': datetime.utcnow(),
-            'result': result,
-            'current_phase': 'completed',
-            'progress': 100
-        })
-
-        logging.info(f"Investigation {investigation_id} completed successfully")
-
-    except Exception as e:
-        logging.error(f"Investigation {investigation_id} failed: {e}")
-        active_investigations[investigation_id].update({
-            'status': 'failed',
-            'end_time': datetime.utcnow(),
-            'error': str(e),
-            'current_phase': 'failed'
-        })
+        memory_stats = await agent.memory.get_memory_stats()
+        pending_tasks = 0
+        if deps.task_queue is not None:
+            pending_tasks = (await deps.task_queue.get_queue_stats()).get("pending_tasks", 0)
+        return AgentStatsResponse(
+            memory_stats=memory_stats,
+            tool_capabilities=agent.tools.get_tool_capabilities(),
+            active_investigations=store.active_count(),
+            investigation_history=memory_stats.get("by_event_type", {}),
+            risk_distribution=memory_stats.get("by_risk_level", {}),
+            avg_investigation_time=memory_stats.get("avg_investigation_duration_seconds", 0.0),
+            pending_tasks=pending_tasks,
+            pending_reviews=len(store.pending_reviews()),
+            llm_provider=f"{agent.llm.provider_name}/{agent.llm.model}" if agent.llm else None,
+            intel_sources=agent.tools.get_available_tools(),
+        )
+    except Exception:
+        logger.exception("Failed to build agent stats")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to get agent stats") from None
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    """Custom HTTP exception handler"""
+@app.get("/api/v1/tools", dependencies=[Depends(get_current_user)])
+async def list_agent_tools(agent: SOCAgentPlanner = Depends(get_soc_agent)) -> Dict[str, Any]:
+    """The read-only tools the agent can choose from, with their JSON schemas."""
+    return {
+        "mode": "flexible_tool_environment",
+        "llm_enabled": agent.llm is not None,
+        "llm_provider": f"{agent.llm.provider_name}/{agent.llm.model}" if agent.llm else None,
+        "max_tool_steps": agent.llm_max_tool_steps,
+        "tools": agent.environment.list_tool_schemas(),
+    }
+
+
+# Legacy single-event endpoints, kept for existing clients; backed by the same store.
+
+@app.post("/api/v1/investigate", response_model=InvestigationResponse,
+          dependencies=[Depends(get_current_user)])
+async def investigate_event(request: InvestigationRequest, agent: SOCAgentPlanner = Depends(get_soc_agent)):
+    store = get_store()
+    investigation_id = new_investigation_id()
+    store.create(investigation_id, request.model_dump())
+    start_investigation(investigation_id, request.event_data, request.emergency_mode)
+    return InvestigationResponse(
+        investigation_id=investigation_id,
+        status="started",
+        message="Investigation started successfully",
+        estimated_completion_time=_utcnow() + timedelta(minutes=2 if request.emergency_mode else 5),
+        priority="emergency" if request.emergency_mode else "normal",
+    )
+
+
+@app.get("/api/v1/investigate/{investigation_id}/status", response_model=InvestigationStatus,
+         dependencies=[Depends(get_current_user)])
+async def get_investigation_status(investigation_id: str):
+    record = get_store().get(investigation_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+    return InvestigationStatus(
+        investigation_id=investigation_id,
+        status=record["status"],
+        start_time=record["created_at"],
+        current_phase=record.get("current_phase") or "unknown",
+        progress_percentage=int(record.get("progress") or 0),
+        estimated_time_remaining=0,
+        preliminary_risk_level=record.get("risk_level") or "unknown",
+    )
+
+
+@app.get("/api/v1/investigate/{investigation_id}/result", dependencies=[Depends(get_current_user)])
+async def get_investigation_result(investigation_id: str):
+    record = get_store().get(investigation_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+    if record["status"] not in ("completed", "pending_human_review"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Investigation not completed. Current status: {record['status']}")
+    return record.get("result") or {}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        content={"error": exc.detail, "status_code": exc.status_code, "timestamp": _utcnow().isoformat()},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = [{"loc": list(e.get("loc", [])), "msg": e.get("msg"), "type": e.get("type")} for e in exc.errors()]
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Validation error", "status_code": 422, "timestamp": _utcnow().isoformat(),
+                 "validation_errors": errors},
     )
 
 
 @app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """General exception handler"""
-    logging.error(f"Unhandled exception: {exc}")
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception on {request.url.path}: {type(exc).__name__}")
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "Internal server error",
-            "status_code": 500,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-
-if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-
-    # Run the server
-    uvicorn.run(
-        "backend.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+        content={"error": "Internal server error", "status_code": 500, "timestamp": _utcnow().isoformat()},
     )

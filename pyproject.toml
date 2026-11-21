@@ -1,0 +1,53 @@
+[project]
+name = "threatsentinel"
+version = "2.1.0"
+description = "Autonomous SOC agent with deterministic LLM-era detection, keyless intel and hardened LLM analysis"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["frontend", "reports", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "S"]
+ignore = [
+    "E501",   # long lines: formatting, not correctness
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency injection uses calls in argument defaults by design
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Header",
+    "fastapi.Security", "fastapi.params.Depends", "fastapi.params.Query",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S104", "S105", "S106", "S108", "S311", "B017"]
+"backend/routes/*" = ["B008"]
+"backend/main.py" = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--strict-markers --tb=short"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+    "mock: CLI/demo tests that only print mocked output",
+    "api: Tests that exercise the HTTP API",
+]
+filterwarnings = [
+    # Project code must stay free of deprecated APIs
+    "error::DeprecationWarning:agent.*",
+    "error::DeprecationWarning:backend.*",
+    "error::PendingDeprecationWarning:agent.*",
+    "error::PendingDeprecationWarning:backend.*",
+    # Third-party notice from Starlette's TestClient about its own httpx dependency
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+]

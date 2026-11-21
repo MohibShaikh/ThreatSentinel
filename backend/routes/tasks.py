@@ -1,32 +1,35 @@
 """
-FastAPI routes for task queue management and monitoring.
-
-Provides endpoints for:
-- Task creation and management
-- Queue monitoring and statistics
-- Task status tracking
-- Worker health monitoring
+Task queue management routes. The queue itself is created, started and
+stopped by the application lifespan (see backend.main).
 """
 
-from typing import Dict, Optional
-from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from backend.deps import get_current_user, get_soc_agent
-from agent.task_queue import TaskQueue, TaskPriority
-from agent.planner import SOCAgentPlanner
+from agent.task_queue import Task, TaskPriority, TaskQueue, TaskStatus
+
+from ..deps import get_current_user, get_task_queue
 
 router = APIRouter(dependencies=[Depends(get_current_user)], prefix="/tasks", tags=["tasks"])
 
-# Pydantic models for request/response
+PRIORITY_MAP = {
+    "low": TaskPriority.LOW,
+    "medium": TaskPriority.MEDIUM,
+    "high": TaskPriority.HIGH,
+    "critical": TaskPriority.CRITICAL,
+    "emergency": TaskPriority.EMERGENCY,
+}
+
+
 class TaskCreateRequest(BaseModel):
-    task_type: str
-    payload: Dict
-    priority: str = "medium"  # low, medium, high, critical, emergency
-    max_retries: int = 3
-    timeout_seconds: int = 300
+    task_type: str = Field(default="investigation", pattern=r"^[a-z_]{1,64}$")
+    payload: Dict[str, Any]
+    priority: str = "medium"
+    max_retries: int = Field(default=3, ge=1, le=10)
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
+
 
 class TaskResponse(BaseModel):
     id: str
@@ -36,11 +39,13 @@ class TaskResponse(BaseModel):
     created_at: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    next_retry_at: Optional[str] = None
     retry_count: int
     max_retries: int
     error_message: Optional[str] = None
-    result: Optional[Dict] = None
+    result: Optional[Any] = None
     timeout_seconds: int
+
 
 class QueueStatsResponse(BaseModel):
     status_counts: Dict[str, int]
@@ -50,111 +55,8 @@ class QueueStatsResponse(BaseModel):
     max_workers: int
     workers_running: int
 
-# Global task queue instance
-task_queue: Optional[TaskQueue] = None
 
-def get_task_queue() -> TaskQueue:
-    """Get or create the global task queue instance."""
-    global task_queue
-    if task_queue is None:
-        task_queue = TaskQueue(max_workers=5)
-
-        # Register investigation handler
-        async def investigation_handler(payload: Dict):
-            from backend.routes.investigations import run_investigation_task, active_investigations
-
-            event_data = payload.get('event_data', {})
-            emergency_mode = payload.get('emergency_mode', False)
-            investigation_id = f"inv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{hash(str(event_data)) % 10000}"
-
-            active_investigations[investigation_id] = {
-                'id': investigation_id,
-                'status': 'pending',
-                'created_at': datetime.utcnow(),
-                'request': {'event_data': event_data, 'emergency_mode': emergency_mode},
-                'progress': 0,
-                'current_phase': 'queued'
-            }
-
-            await run_investigation_task(investigation_id, event_data, emergency_mode)
-
-            record = active_investigations[investigation_id]
-            if record['status'] != 'completed':
-                raise Exception(record.get('error', 'Investigation failed'))
-            return record.get('result')
-
-        task_queue.register_handler("investigation", investigation_handler)
-
-        # Start the workers (this should be done in app startup)
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(task_queue.start())
-        except Exception:
-            pass  # Workers will be started manually
-
-    return task_queue
-
-@router.post("/", response_model=TaskResponse)
-async def create_task(request: TaskCreateRequest):
-    """Create a new task in the queue."""
-    queue = get_task_queue()
-
-    # Convert priority string to enum
-    priority_map = {
-        "low": TaskPriority.LOW,
-        "medium": TaskPriority.MEDIUM,
-        "high": TaskPriority.HIGH,
-        "critical": TaskPriority.CRITICAL,
-        "emergency": TaskPriority.EMERGENCY
-    }
-
-    if request.priority.lower() not in priority_map:
-        raise HTTPException(status_code=400, detail="Invalid priority level")
-
-    priority = priority_map[request.priority.lower()]
-
-    try:
-        task_id = await queue.add_task(
-            task_type=request.task_type,
-            payload=request.payload,
-            priority=priority,
-            max_retries=request.max_retries,
-            timeout_seconds=request.timeout_seconds
-        )
-
-        # Get the created task details
-        task = await queue.get_task_status(task_id)
-        if not task:
-            raise HTTPException(status_code=500, detail="Failed to retrieve created task")
-
-        return TaskResponse(
-            id=task.id,
-            task_type=task.task_type,
-            priority=task.priority.name.lower(),
-            status=task.status.value,
-            created_at=task.created_at.isoformat(),
-            started_at=task.started_at.isoformat() if task.started_at else None,
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            retry_count=task.retry_count,
-            max_retries=task.max_retries,
-            error_message=task.error_message,
-            result=task.result,
-            timeout_seconds=task.timeout_seconds
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
-
-@router.get("/{task_id}", response_model=TaskResponse)
-async def get_task_status(task_id: str):
-    """Get the status of a specific task."""
-    queue = get_task_queue()
-
-    task = await queue.get_task_status(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
+def _to_response(task: Task) -> TaskResponse:
     return TaskResponse(
         id=task.id,
         task_type=task.task_type,
@@ -163,79 +65,92 @@ async def get_task_status(task_id: str):
         created_at=task.created_at.isoformat(),
         started_at=task.started_at.isoformat() if task.started_at else None,
         completed_at=task.completed_at.isoformat() if task.completed_at else None,
+        next_retry_at=task.next_retry_at.isoformat() if task.next_retry_at else None,
         retry_count=task.retry_count,
         max_retries=task.max_retries,
         error_message=task.error_message,
         result=task.result,
-        timeout_seconds=task.timeout_seconds
+        timeout_seconds=task.timeout_seconds,
     )
 
-@router.delete("/{task_id}")
-async def cancel_task(task_id: str):
-    """Cancel a pending or in-progress task."""
-    queue = get_task_queue()
 
-    success = await queue.cancel_task(task_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Task not found or cannot be cancelled")
+async def _enqueue(request: TaskCreateRequest, queue: TaskQueue) -> TaskResponse:
+    priority = PRIORITY_MAP.get(request.priority.lower())
+    if priority is None:
+        raise HTTPException(status_code=400, detail="Invalid priority level")
+    if request.task_type not in queue.task_handlers:
+        raise HTTPException(status_code=400, detail=f"No handler registered for task type '{request.task_type}'")
+    if request.task_type == "investigation":
+        event = request.payload.get("event_data")
+        if not isinstance(event, dict) or "event_type" not in event:
+            raise HTTPException(status_code=422, detail="investigation payload needs event_data.event_type")
+    task_id = await queue.add_task(task_type=request.task_type, payload=request.payload, priority=priority,
+                                   max_retries=request.max_retries, timeout_seconds=request.timeout_seconds)
+    task = await queue.get_task_status(task_id)
+    if not task:
+        raise HTTPException(status_code=500, detail="Failed to retrieve created task")
+    return _to_response(task)
 
-    return {"message": f"Task {task_id} cancelled successfully"}
+
+@router.post("/", response_model=TaskResponse)
+async def create_task(request: TaskCreateRequest, queue: TaskQueue = Depends(get_task_queue)):
+    return await _enqueue(request, queue)
+
 
 @router.get("/", response_model=QueueStatsResponse)
-async def get_queue_stats():
-    """Get current queue statistics and status."""
-    queue = get_task_queue()
+async def get_queue_stats(queue: TaskQueue = Depends(get_task_queue)):
+    return QueueStatsResponse(**(await queue.get_queue_stats()))
 
-    stats = await queue.get_queue_stats()
-
-    return QueueStatsResponse(
-        status_counts=stats['status_counts'],
-        pending_tasks=stats['pending_tasks'],
-        active_tasks=stats['active_tasks'],
-        task_type_counts=stats['task_type_counts'],
-        max_workers=stats['max_workers'],
-        workers_running=stats['workers_running']
-    )
-
-@router.post("/queue/start")
-async def start_queue():
-    """Start the task queue workers."""
-    queue = get_task_queue()
-
-    try:
-        await queue.start()
-        return {"message": "Task queue workers started successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start queue: {str(e)}")
-
-@router.post("/queue/stop")
-async def stop_queue():
-    """Stop the task queue workers gracefully."""
-    queue = get_task_queue()
-
-    try:
-        await queue.stop()
-        return {"message": "Task queue workers stopped successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to stop queue: {str(e)}")
-
-@router.post("/queue/cleanup")
-async def cleanup_old_tasks(days: int = 30):
-    """Clean up completed/failed tasks older than specified days."""
-    queue = get_task_queue()
-
-    try:
-        deleted_count = await queue.cleanup_old_tasks(days)
-        return {"message": f"Cleaned up {deleted_count} old tasks"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to cleanup tasks: {str(e)}")
 
 @router.post("/investigations/", response_model=TaskResponse)
-async def create_investigation_task(
-    request: TaskCreateRequest,
-    agent: SOCAgentPlanner = Depends(get_soc_agent)
-):
-    """Create a new investigation task (convenience endpoint)."""
-    # Override task type for investigations
-    request.task_type = "investigation"
-    return await create_task(request)
+async def create_investigation_task(request: TaskCreateRequest, queue: TaskQueue = Depends(get_task_queue)):
+    """Convenience endpoint: enqueue an investigation."""
+    return await _enqueue(request.model_copy(update={"task_type": "investigation"}), queue)
+
+
+@router.post("/queue/start")
+async def start_queue(queue: TaskQueue = Depends(get_task_queue)):
+    await queue.start()
+    return {"message": "Task queue workers running", "workers_running": len(queue.workers)}
+
+
+@router.post("/queue/stop")
+async def stop_queue(queue: TaskQueue = Depends(get_task_queue)):
+    await queue.stop()
+    return {"message": "Task queue workers stopped"}
+
+
+@router.post("/queue/cleanup")
+async def cleanup_old_tasks(days: int = Query(30, ge=1, le=3650), queue: TaskQueue = Depends(get_task_queue)):
+    deleted = await queue.cleanup_old_tasks(days)
+    return {"message": f"Cleaned up {deleted} old tasks"}
+
+
+class TaskListResponse(BaseModel):
+    tasks: List[TaskResponse]
+    total_count: int
+
+
+# Registered before /{task_id} so "items" is never read as a task id
+@router.get("/items", response_model=TaskListResponse)
+async def list_tasks(status: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=200),
+                     queue: TaskQueue = Depends(get_task_queue)):
+    if status is not None and status not in {s.value for s in TaskStatus}:
+        raise HTTPException(status_code=400, detail="Invalid task status")
+    tasks = await queue.list_tasks(status=status, limit=limit)
+    return TaskListResponse(tasks=[_to_response(t) for t in tasks], total_count=await queue.count_tasks(status))
+
+
+@router.get("/{task_id}", response_model=TaskResponse)
+async def get_task_status(task_id: str, queue: TaskQueue = Depends(get_task_queue)):
+    task = await queue.get_task_status(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return _to_response(task)
+
+
+@router.delete("/{task_id}")
+async def cancel_task(task_id: str, queue: TaskQueue = Depends(get_task_queue)):
+    if not await queue.cancel_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found or cannot be cancelled")
+    return {"message": f"Task {task_id} cancelled successfully"}

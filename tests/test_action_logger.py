@@ -261,3 +261,75 @@ class TestActionLogger:
         remaining = action_logger.get_investigation_logs(inv_id)
         ids = [entry.id for entry in remaining]
         assert log_id not in ids
+
+
+class TestAuditHashChain:
+    @pytest.fixture
+    def logger(self, tmp_path):
+        log = ActionLogger(db_path=str(tmp_path / "audit.db"))
+        for i in range(5):
+            log.log_action(ActionType.SYSTEM_EVENT, "Test", f"event {i}", investigation_id="inv_1",
+                           details={"i": i})
+        return log
+
+    def test_chain_valid(self, logger):
+        result = logger.verify_integrity()
+        assert result["valid"] is True and result["total_entries"] == 5 and result["broken_links"] == []
+
+    def test_tampered_content_detected(self, logger):
+        with sqlite3.connect(logger.db_path) as conn:
+            conn.execute("UPDATE action_logs SET description = 'nothing happened' WHERE rowid = 3")
+        result = logger.verify_integrity()
+        assert result["valid"] is False
+        assert any("content altered" in b["reason"] for b in result["broken_links"])
+
+    def test_deleted_entry_detected(self, logger):
+        with sqlite3.connect(logger.db_path) as conn:
+            conn.execute("DELETE FROM action_logs WHERE rowid = 2")
+        result = logger.verify_integrity()
+        assert result["valid"] is False
+        assert any("deleted or reordered" in b["reason"] for b in result["broken_links"])
+
+    def test_pruning_keeps_chain_verifiable(self, logger):
+        with sqlite3.connect(logger.db_path) as conn:
+            conn.execute("UPDATE action_logs SET timestamp = '2000-01-01T00:00:00+00:00' WHERE rowid <= 2")
+        # Back-dating rows breaks their hashes, so re-chain them as if they had been written then
+        import agent.action_logger as al
+        with sqlite3.connect(logger.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            prev = al.GENESIS_HASH
+            for row in conn.execute("SELECT rowid, * FROM action_logs ORDER BY rowid").fetchall():
+                h = al.compute_entry_hash(prev, row["id"], row["timestamp"], row["investigation_id"],
+                                          row["action_type"], row["status"], row["level"], row["component"],
+                                          row["description"], row["details"], row["error_message"])
+                conn.execute("UPDATE action_logs SET prev_hash = ?, entry_hash = ? WHERE rowid = ?",
+                             (prev, h, row["rowid"]))
+                prev = h
+        assert logger.verify_integrity()["valid"] is True
+        assert logger.cleanup_old_logs(days=30) == 2
+        result = logger.verify_integrity()
+        assert result["valid"] is True, result["broken_links"]
+
+    def test_legacy_db_migrated(self, tmp_path):
+        path = tmp_path / "legacy.db"
+        with sqlite3.connect(path) as conn:
+            conn.execute("""CREATE TABLE action_logs (id TEXT PRIMARY KEY, timestamp TEXT NOT NULL,
+                investigation_id TEXT, action_type TEXT NOT NULL, status TEXT NOT NULL, level TEXT NOT NULL,
+                component TEXT NOT NULL, description TEXT NOT NULL, details TEXT, duration_ms INTEGER,
+                error_message TEXT, correlation_id TEXT)""")
+            conn.execute("INSERT INTO action_logs VALUES ('old', '2024-01-01T00:00:00', NULL, 'system_event', "
+                         "'success', 'info', 'Legacy', 'old row', '{}', NULL, NULL, NULL)")
+        log = ActionLogger(db_path=str(path))
+        log.log_action(ActionType.SYSTEM_EVENT, "New", "new row")
+        result = log.verify_integrity()
+        assert result["valid"] is True
+        assert result["legacy_unchained_entries"] == 1 and result["chained_entries"] == 1
+
+    def test_search_and_overview_helpers(self, logger):
+        logs = logger.search_logs(investigation_id="inv_1", component="Test", limit=3)
+        assert len(logs) == 3
+        assert logger.search_logs(component="Nope") == []
+        components = logger.get_active_components(24)
+        assert components[0]["component"] == "Test" and components[0]["action_count"] == 5
+        overview = logger.get_overview(24)
+        assert overview["total_actions_logged"] == 5 and overview["recent_actions_24h"] == 5

@@ -4,10 +4,17 @@ ThreatSentinel SOC Agent Backend Models
 Pydantic models for API request and response validation.
 """
 
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from agent.guardrails import validate_outbound_url
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class EventType(str, Enum):
@@ -19,6 +26,15 @@ class EventType(str, Enum):
     MALWARE_DETECTION = "malware_detection"
     PHISHING_ATTEMPT = "phishing_attempt"
     UNKNOWN = "unknown"
+    # LLM-era / cloud-native
+    PROMPT_INJECTION = "prompt_injection"
+    AGENT_TOOL_ABUSE = "agent_tool_abuse"
+    MCP_TOOL_POISONING = "mcp_tool_poisoning"
+    RAG_POISONING = "rag_poisoning"
+    SECRET_LEAK = "secret_leak"  # noqa: S105 - event type name, not a credential
+    MODEL_DOS = "model_dos"
+    SUPPLY_CHAIN_COMPROMISE = "supply_chain_compromise"
+    DATA_EXFILTRATION = "data_exfiltration"
 
 
 class RiskLevel(str, Enum):
@@ -114,6 +130,9 @@ class ActionRecommendation(BaseModel):
     estimated_effort: str = Field(..., description="Estimated time/effort required")
     technical_details: Optional[str] = Field(default="", description="Technical implementation details")
     urgency: Optional[str] = Field(default="medium", description="Urgency level")
+    automated_capable: bool = Field(default=False,
+                                    description="An active integration can execute this action")
+    trigger: Optional[str] = Field(default=None, description="Detection category that produced this action")
 
 
 class ThreatIntelligence(BaseModel):
@@ -121,8 +140,8 @@ class ThreatIntelligence(BaseModel):
     sources_consulted: List[str] = Field(..., description="List of intelligence sources consulted")
     overall_reputation_score: float = Field(..., ge=0.0, le=1.0, description="Overall reputation score")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in the intelligence")
-    threat_indicators: List[str] = Field(default=[], description="List of threat indicators found")
-    source_details: List[Dict[str, Any]] = Field(default=[], description="Detailed results from each source")
+    threat_indicators: List[str] = Field(default_factory=list, description="List of threat indicators found")
+    source_details: List[Dict[str, Any]] = Field(default_factory=list, description="Detailed results from each source")
 
 
 class RiskAssessment(BaseModel):
@@ -130,7 +149,8 @@ class RiskAssessment(BaseModel):
     overall_score: float = Field(..., ge=0.0, le=1.0, description="Overall risk score")
     risk_level: RiskLevel = Field(..., description="Categorical risk level")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in assessment")
-    component_scores: Dict[str, float] = Field(..., description="Individual component risk scores")
+    component_scores: Dict[str, Optional[float]] = Field(
+        ..., description="Component risk scores; intelligence_risk is null when no intel source answered")
     risk_factors: List[str] = Field(default=[], description="Factors contributing to risk")
     mitigating_factors: List[str] = Field(default=[], description="Factors reducing risk")
 
@@ -141,6 +161,8 @@ class InvestigationReport(BaseModel):
     executive_summary: str = Field(..., description="Executive summary of findings")
     event_analysis: Dict[str, Any] = Field(..., description="Detailed event analysis")
     threat_intelligence: ThreatIntelligence = Field(..., description="Threat intelligence findings")
+    detection: Dict[str, Any] = Field(default_factory=dict, description="Deterministic detection results")
+    guardrails: Dict[str, Any] = Field(default_factory=dict, description="Prompt injection and redaction status")
     risk_assessment: RiskAssessment = Field(..., description="Risk assessment results")
     recommended_actions: List[ActionRecommendation] = Field(..., description="Recommended actions")
     investigation_timeline: List[str] = Field(..., description="Investigation reasoning log")
@@ -180,18 +202,22 @@ class AgentStatsResponse(BaseModel):
     investigation_history: Dict[str, int] = Field(..., description="Investigation count by event type")
     risk_distribution: Dict[str, int] = Field(..., description="Investigation count by risk level")
     avg_investigation_time: float = Field(..., description="Average investigation duration in seconds")
+    pending_tasks: int = Field(default=0, description="Queued or retrying background tasks")
+    pending_reviews: int = Field(default=0, description="Investigations awaiting analyst review")
+    llm_provider: Optional[str] = Field(default=None, description="Active LLM provider, null when disabled")
+    intel_sources: List[str] = Field(default_factory=list, description="Enabled intelligence tools")
 
 
 class ReportRequest(BaseModel):
     """Request model for generating reports"""
     investigation_id: str = Field(..., description="Investigation ID to generate report for")
-    format: str = Field(default="json", description="Report format (json, markdown, html)")
+    format: str = Field(default="json", description="Report format (json, markdown, html, stix)")
     include_raw_data: bool = Field(default=False, description="Include raw intelligence data")
 
     @field_validator('format')
     @classmethod
     def validate_format(cls, v):
-        allowed_formats = ['json', 'markdown', 'html']
+        allowed_formats = ['json', 'markdown', 'html', 'stix']
         if v.lower() not in allowed_formats:
             raise ValueError(f"Format must be one of: {allowed_formats}")
         return v.lower()
@@ -216,7 +242,7 @@ class MonitoringMetrics(BaseModel):
     high_risk_events_today: int = Field(..., description="High/critical risk events today")
     api_response_time: Optional[float] = Field(None, description="Average API response time, null when not instrumented")
     memory_usage_mb: float = Field(..., description="Current memory usage in MB")
-    threat_intel_api_calls: Dict[str, int] = Field(default_factory=dict, description="API calls by source, empty when no calls were made")
+    threat_intel_api_calls: Dict[str, int] = Field(default_factory=dict, description="External intel API calls by source since startup")
     error_rate: float = Field(..., description="Current error rate percentage")
 
 
@@ -234,8 +260,15 @@ class EventSubscription(BaseModel):
     subscription_id: str = Field(default="", description="Unique subscription identifier, assigned by the server when empty")
     event_types: List[EventType] = Field(..., description="Event types to subscribe to")
     risk_levels: List[RiskLevel] = Field(default=[], description="Risk levels to filter by")
-    webhook_url: Optional[str] = Field(default=None, description="Webhook URL for notifications")
+    webhook_url: Optional[str] = Field(default=None, description="HTTPS webhook URL for notifications")
     active: bool = Field(default=True, description="Subscription status")
+
+    @field_validator('webhook_url')
+    @classmethod
+    def validate_webhook_url(cls, v):
+        if v is None or v == "":
+            return None
+        return validate_outbound_url(v)
 
 
 class BulkInvestigationRequest(BaseModel):
@@ -298,6 +331,7 @@ class ValidationErrorResponse(BaseModel):
     timestamp: datetime = Field(..., description="Error timestamp")
     validation_errors: List[Dict[str, Any]] = Field(..., description="Detailed validation errors")
 
+
 class ReviewStatus(str, Enum):
     """Review status for human oversight"""
     PENDING_REVIEW = "pending_review"
@@ -306,12 +340,16 @@ class ReviewStatus(str, Enum):
     REJECTED = "rejected"
     NEEDS_ESCALATION = "needs_escalation"
 
+
+
 class ReviewPriority(str, Enum):
     """Priority levels for human review"""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
 
 class HumanReviewRequest(BaseModel):
     """Request for human analyst review"""
@@ -323,20 +361,25 @@ class HumanReviewRequest(BaseModel):
     escalation_triggers: List[str]
     auto_escalated: bool = False
     assigned_analyst: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 
 class AnalystFeedback(BaseModel):
     """Analyst feedback on investigation"""
-    investigation_id: str
-    analyst_id: str
+    investigation_id: Optional[str] = None
+    analyst_id: str = Field(..., min_length=1, max_length=128)
     review_status: ReviewStatus
-    feedback_text: str
-    accuracy_rating: int = Field(ge=1, le=5, description="1-5 rating of AI analysis accuracy")
+    feedback_text: str = Field(default="", max_length=10000)
+    accuracy_rating: int = Field(default=3, ge=1, le=5, description="1-5 rating of AI analysis accuracy")
     false_positive: bool = False
-    missed_indicators: List[str] = []
-    suggested_actions: List[str] = []
-    learning_notes: str = ""
-    reviewed_at: datetime = Field(default_factory=datetime.utcnow)
+    execute_actions: bool = Field(default=False, description="Execute proposed actions when approved")
+    missed_indicators: List[str] = Field(default_factory=list)
+    suggested_actions: List[str] = Field(default_factory=list)
+    learning_notes: str = Field(default="", max_length=10000)
+    reviewed_at: datetime = Field(default_factory=_utcnow)
+
+
 
 class AuditEntry(BaseModel):
     """Audit trail entry for compliance"""
@@ -345,9 +388,11 @@ class AuditEntry(BaseModel):
     actor: str  # "system" or analyst ID
     action: str
     details: Dict[str, Any]
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
     ip_address: Optional[str] = None
     session_id: Optional[str] = None
+
+
 
 class ReviewQueue(BaseModel):
     """Human review queue item"""
@@ -362,6 +407,8 @@ class ReviewQueue(BaseModel):
     created_at: datetime
     sla_deadline: datetime
     escalation_count: int = 0
+
+
 
 class EscalationRule(BaseModel):
     """Rules for automatic escalation to human review"""

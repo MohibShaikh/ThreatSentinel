@@ -5,7 +5,7 @@ Unit tests for agent/memory.py
 import pytest
 import tempfile
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from agent.memory import AgentMemory, InvestigationMemory, PatternInsight
@@ -77,7 +77,7 @@ class TestAgentMemory:
             risk_assessment={"risk_score": 0.7, "risk_level": "high"},
             intelligence_data={"sources": ["vt"]},
             recommended_actions=[{"action_type": "BLOCK"}],
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
         )
         result = await memory.store_investigation(ctx)
         assert result is True
@@ -97,7 +97,7 @@ class TestAgentMemory:
             risk_assessment={"risk_score": 0.6, "risk_level": "medium"},
             intelligence_data={"sources": []},
             recommended_actions=[],
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
         )
         await memory.store_investigation(ctx)
 
@@ -114,7 +114,7 @@ class TestAgentMemory:
             risk_assessment={"risk_score": 0.5, "risk_level": "medium"},
             intelligence_data={"sources": []},
             recommended_actions=[],
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
         )
         await memory.store_investigation(ctx)
 
@@ -129,7 +129,7 @@ class TestAgentMemory:
             risk_assessment={"risk_score": 0.3, "risk_level": "low"},
             intelligence_data={"sources": []},
             recommended_actions=[],
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
         )
         await memory.store_investigation(ctx)
         result = await memory.update_investigation_outcome("evt_outcome_001", "benign")
@@ -143,7 +143,7 @@ class TestAgentMemory:
             risk_assessment={"risk_score": 0.4, "risk_level": "medium"},
             intelligence_data={"sources": []},
             recommended_actions=[],
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
         )
         await memory.store_investigation(ctx)
         result = await memory.mark_false_positive("evt_fp_001", "false alarm")
@@ -157,11 +157,11 @@ class TestAgentMemory:
             risk_assessment={"risk_score": 0.5, "risk_level": "medium"},
             intelligence_data={"sources": []},
             recommended_actions=[],
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
         )
         await memory.store_investigation(ctx)
 
-        old_ts = (datetime.utcnow() - timedelta(days=400)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
         with sqlite3.connect(memory.db_path) as conn:
             conn.execute(
                 "UPDATE investigations SET timestamp = ? WHERE event_id = ?",
@@ -191,3 +191,64 @@ class TestAgentMemory:
         sim_same = memory._calculate_similarity(e1, e2)
         sim_diff = memory._calculate_similarity(e1, e3)
         assert sim_same > sim_diff
+
+
+class TestMemoryHardening:
+    @pytest.fixture
+    def memory(self, tmp_path):
+        return AgentMemory({"memory_dir": str(tmp_path), "max_memories": 5})
+
+    @staticmethod
+    def ctx(event_id, event_data, risk=0.8, level="high"):
+        return SimpleNamespace(event_id=event_id, event_data=event_data,
+                               risk_assessment={"risk_score": risk, "risk_level": level},
+                               intelligence_data={"sources": []}, recommended_actions=[],
+                               start_time=datetime.now(timezone.utc))
+
+    async def test_cosine_ranking_orders_by_similarity(self, memory):
+        await memory.store_investigation(self.ctx("near", {
+            "event_type": "suspicious_ip", "source_ip": "8.8.8.8",
+            "payload": {"failed_login_attempts": 40, "accessed_endpoints": ["/admin", "/login"]}}))
+        await memory.store_investigation(self.ctx("far", {
+            "event_type": "suspicious_ip", "source_ip": "9.9.9.9", "payload": {"bytes_out": 10}}))
+        await memory.store_investigation(self.ctx("other", {
+            "event_type": "malware_detection", "file_hash": "c" * 64}))
+        memory.similarity_threshold = 0.0
+        results = await memory.find_similar_events({
+            "event_type": "suspicious_ip", "source_ip": "8.8.8.8",
+            "payload": {"failed_login_attempts": 35, "accessed_endpoints": ["/admin"]}})
+        assert [r.event_id for r in results][0] == "near"
+        sims = [r.similarity for r in results]
+        assert sims == sorted(sims, reverse=True)
+        assert all(0.0 <= s <= 1.0 for s in sims)
+
+    def test_ioc_overlap_raises_similarity(self, memory):
+        base = {"event_type": "suspicious_url", "raw_data": "callback http://c2.example.net/x"}
+        same_ioc = {"event_type": "suspicious_url", "raw_data": "beacon http://c2.example.net/x"}
+        other_ioc = {"event_type": "suspicious_url", "raw_data": "beacon http://cdn.example.org/y"}
+        assert memory._calculate_similarity(base, same_ioc) > memory._calculate_similarity(base, other_ioc)
+
+    async def test_max_memories_pruning(self, memory):
+        for i in range(8):
+            await memory.store_investigation(self.ctx(f"evt_{i}", {"event_type": "unknown", "n": i}))
+        stats = await memory.get_memory_stats()
+        assert stats["total_investigations"] == 5
+
+    async def test_false_positive_recorded_in_results_and_patterns(self, memory):
+        event = {"event_type": "suspicious_ip", "source_ip": "8.8.8.8"}
+        await memory.store_investigation(self.ctx("fp1", event))
+        await memory.mark_false_positive("fp1", "scanner")
+        results = await memory.find_similar_events(event)
+        assert results and results[0].false_positive is True
+        assert memory.patterns["suspicious_ip"]["false_positive_count"] == 1
+        assert memory.patterns["suspicious_ip"]["ip_patterns"]["8.8.8.8"]["false_positive_count"] == 1
+        stats = await memory.get_memory_stats()
+        assert stats["false_positives"] == 1
+
+    def test_embedding_hash_is_sha256(self, memory):
+        h = memory._generate_embedding_hash({"event_type": "x"})
+        assert len(h) == 64
+
+    def test_wal_enabled(self, memory):
+        with sqlite3.connect(memory.db_path) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"

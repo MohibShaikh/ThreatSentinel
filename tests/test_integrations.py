@@ -825,3 +825,188 @@ class TestIntegrationsCLIMockInteractions:
             },
             "query_timestamp": datetime.now().isoformat()
         }, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Hardening
+# ---------------------------------------------------------------------------
+
+from agent.integrations.base import safe_path_segment, stable_reference  # noqa: E402
+from agent.integrations.siem import _csv_line  # noqa: E402
+
+
+class TestIntegrationHardening:
+    def test_stable_reference_is_deterministic(self):
+        assert stable_reference("x") == stable_reference("x") and len(stable_reference("x")) == 10
+
+    @pytest.mark.parametrize("bad", ["../etc", "a/b", "id?x=1", "id#frag", "", "a\\b", "x" * 200])
+    def test_safe_path_segment_rejects(self, bad):
+        with pytest.raises(ValueError):
+            safe_path_segment(bad)
+
+    def test_safe_path_segment_allows_ids(self):
+        assert safe_path_segment("INC0012345") == "INC0012345"
+        assert safe_path_segment("SEC-42") == "SEC-42"
+
+    async def test_make_request_handles_non_json(self):
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "text/plain"}
+
+            async def text(self):
+                return "OK plain"
+
+        class Ctx:
+            async def __aenter__(self):
+                return Resp()
+
+            async def __aexit__(self, *a):
+                return False
+
+        integration = SlackIntegration({"webhook_url": "https://hooks.slack.com/services/x"})
+        integration.session = MagicMock()
+        integration.session.request = MagicMock(return_value=Ctx())
+        assert await integration._make_request("POST", "https://hooks.slack.com/x") == {
+            "raw_text": "OK plain", "content_type": "text/plain"}
+
+    def test_registry_status_is_synchronous(self):
+        registry = IntegrationRegistry({"integrations": {"slack": {"webhook_url": "https://hooks.slack.com/x"}}})
+        status = registry.get_registry_status()
+        assert "health_check" not in status
+        json.dumps(status)  # nothing un-serializable (no Task objects)
+
+    # --- firewall
+    def test_palo_alto_rejects_bad_vsys(self):
+        with pytest.raises(ValueError):
+            PaloAltoIntegration({"hostname": "fw", "api_key": "k", "vsys": "vsys1']/x"})
+
+    async def test_palo_alto_watchlist_supported(self):
+        integration = PaloAltoIntegration({"hostname": "fw", "api_key": "k"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={}) as req:
+            result = await integration.execute_action(ActionType.ADD_TO_WATCHLIST, "8.8.8.8", {})
+        assert result.success is True
+        assert "ThreatSentinel_Watchlist" in req.call_args_list[-1].kwargs["params"]["xpath"]
+
+    async def test_fortinet_ipv6_uses_128(self):
+        integration = FortinetIntegration({"hostname": "fg", "api_key": "k"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={"mkey": "1"}) as req:
+            await integration.execute_action(ActionType.BLOCK_IP, "2001:4860:4860::8888", {})
+        assert req.call_args.args[1].endswith("/firewall/address6")
+        assert req.call_args.kwargs["json"]["ip6"].endswith("/128")
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={"mkey": "1"}) as req:
+            await integration.execute_action(ActionType.BLOCK_IP, "8.8.8.8", {})
+        assert req.call_args.kwargs["json"]["subnet"] == "8.8.8.8/32"
+
+    async def test_fortinet_block_domain_implemented(self):
+        integration = FortinetIntegration({"hostname": "fg", "api_key": "k"})
+        assert ActionType.BLOCK_DOMAIN in integration.get_supported_actions()
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={"mkey": "1"}):
+            result = await integration.execute_action(ActionType.BLOCK_DOMAIN, "evil.example.com", {})
+        assert result.success is True
+
+    async def test_fortinet_policy_rejects_injected_names(self):
+        integration = FortinetIntegration({"hostname": "fg", "api_key": "k"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={}):
+            result = await integration.execute_action(ActionType.CREATE_RULE, "block-evil",
+                                                      {"source_interface": 'port1"; drop'})
+        assert result.success is False
+
+    async def test_pfsense_validates_ip_and_rule_fields(self):
+        integration = PfSenseIntegration({"hostname": "pf", "api_key": "k", "api_secret": "s"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={"id": 1}):
+            bad_ip = await integration.execute_action(ActionType.BLOCK_IP, "1.2.3.4; rm -rf /", {})
+            bad_action = await integration.execute_action(ActionType.CREATE_RULE, "r", {"action": "allow-all"})
+            ok = await integration.execute_action(ActionType.ADD_TO_WATCHLIST, "8.8.8.8", {})
+        assert bad_ip.success is False and bad_action.success is False and ok.success is True
+
+    # --- SIEM
+    def test_csv_formula_injection_neutralized(self):
+        line = _csv_line(["=cmd|' /C calc'!A0", "a,b", None, 'say "hi"'])
+        assert line.startswith("'=cmd")
+        assert '"a,b"' in line and '""hi""' in line
+
+    async def test_splunk_rejects_raw_query_override(self):
+        integration = SplunkIntegration({"hostname": "s", "username": "u", "password": "p"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={}):
+            result = await integration.execute_action(ActionType.CREATE_RULE, "ts-rule",
+                                                      {"target": "8.8.8.8", "search_query": "| delete"})
+        assert result.success is False
+
+    async def test_qradar_rule_sanitizes_indicator(self):
+        integration = QRadarIntegration({"hostname": "q", "sec_token": "t"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={"id": 1}) as req:
+            bad = await integration.execute_action(ActionType.CREATE_RULE, "r1", {"target": "1.1.1.1' OR '1'='1"})
+            good = await integration.execute_action(ActionType.CREATE_RULE, "r1", {"target": "1.1.1.1"})
+        assert bad.success is False and good.success is True
+        assert "1.1.1.1" in req.call_args.kwargs["json"]["tests"][0]["text"]
+
+    async def test_qradar_reference_set_name_validated(self):
+        integration = QRadarIntegration({"hostname": "q", "sec_token": "t"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={}):
+            result = await integration.execute_action(ActionType.ADD_TO_WATCHLIST, "8.8.8.8",
+                                                      {"reference_set": "../../config"})
+        assert result.success is False
+
+    # --- communication
+    async def test_slack_webhook_ssrf_blocked(self):
+        integration = SlackIntegration({"webhook_url": "https://169.254.169.254/latest/meta-data"})
+        integration.session = MagicMock()
+        result = await integration.execute_action(ActionType.SEND_ALERT, "x", {})
+        assert result.success is False
+        assert await SlackIntegration({"webhook_url": "https://evil.example/hook"}).connect() is False
+
+    async def test_teams_webhook_allowlist(self):
+        assert await TeamsIntegration({"webhook_url": "https://evil.example/webhook.office.com"}).connect() is False
+        ok = TeamsIntegration({"webhook_url": "https://acme.webhook.office.com/webhookb2/abc"})
+        assert await ok.connect() is True
+        await ok.disconnect()
+
+    async def test_teams_workflows_use_adaptive_card(self):
+        integration = TeamsIntegration({"webhook_url": "https://prod-01.westus.logic.azure.com:443/workflows/x"})
+        with patch.object(integration, "_make_request", new_callable=AsyncMock, return_value={}) as req:
+            result = await integration.execute_action(ActionType.SEND_ALERT, "alert", {"severity": "high"})
+        assert result.success is True
+        card = req.call_args.kwargs["json"]
+        assert card["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"
+
+    async def test_email_html_escaped_and_header_injection_blocked(self):
+        integration = EmailIntegration({"smtp_server": "smtp", "from_email": "ts@corp.example",
+                                        "default_recipients": ["soc@corp.example"]})
+        sent = {}
+
+        def fake_send(recipients, subject, html_body, message_id=None):
+            sent["html"] = html_body
+
+        with patch.object(integration, "_send_email_sync", side_effect=fake_send):
+            result = await integration.execute_action(
+                ActionType.SEND_ALERT, "<script>alert(1)</script>",
+                {"investigation_id": "<img src=x onerror=1>", "actions": ["<b>x</b>"]})
+        assert result.success is True
+        assert "<script>" not in sent["html"] and "&lt;script&gt;" in sent["html"]
+        assert "<img" not in sent["html"] and "<b>x</b>" not in sent["html"]
+
+        bad = await integration.execute_action(ActionType.NOTIFY, "x",
+                                               {"recipients": ["soc@corp.example\r\nBcc: evil@x.example"]})
+        assert bad.success is False
+
+    def test_email_uses_timeout_and_tls_context(self):
+        integration = EmailIntegration({"smtp_server": "smtp", "smtp_port": 587, "from_email": "a@b.example"})
+        with patch("smtplib.SMTP") as smtp:
+            integration._smtp()
+        assert smtp.call_args.kwargs["timeout"] == 15
+        assert smtp.return_value.starttls.call_args.kwargs["context"] is not None
+
+    # --- incident
+    async def test_incident_ids_validated(self):
+        servicenow = ServiceNowIntegration({"instance_url": "https://x.service-now.com", "username": "u",
+                                            "password": "p"})
+        jira = JiraIntegration({"server_url": "https://x.atlassian.net", "username": "u", "api_token": "t",
+                                "project_key": "SEC"})
+        pagerduty = PagerDutyIntegration({"api_token": "t"})
+        for integration, action in ((servicenow, ActionType.UPDATE_INCIDENT), (jira, ActionType.UPDATE_INCIDENT),
+                                    (pagerduty, ActionType.ESCALATE)):
+            with patch.object(integration, "_make_request", new_callable=AsyncMock,
+                              return_value={"result": {"state": "2"}}) as req:
+                result = await integration.execute_action(action, "../admin?x=1", {"status": "resolved"})
+            assert result.success is False
+            req.assert_not_called()

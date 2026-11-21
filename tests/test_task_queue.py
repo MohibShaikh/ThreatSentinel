@@ -11,7 +11,7 @@ import tempfile
 import os
 import sqlite3
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from agent.task_queue import (
     TaskQueue, Task, TaskStatus, TaskPriority
@@ -633,3 +633,77 @@ class TestTaskQueueCLIMockInteractions:
             },
             "timestamp": "2024-07-27T14:37:00Z"
         }, indent=2))
+
+
+class TestTaskQueueHardening:
+    @pytest.fixture
+    def queue(self, tmp_path):
+        return TaskQueue(db_path=str(tmp_path / "q.db"), max_workers=2)
+
+    async def test_backoff_is_enforced(self, queue):
+        task_id = await queue.add_task("t", {}, TaskPriority.HIGH, max_retries=3)
+        claimed = await queue.get_next_task()
+        assert claimed.id == task_id
+        await queue.fail_task(task_id, "boom")
+        status = await queue.get_task_status(task_id)
+        assert status.status == TaskStatus.RETRYING
+        assert status.next_retry_at > datetime.now(timezone.utc)
+        assert await queue.get_next_task() is None  # not due yet
+
+        with sqlite3.connect(queue.db_path) as conn:
+            past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            conn.execute("UPDATE tasks SET next_retry_at = ? WHERE id = ?", (past, task_id))
+        due = await queue.get_next_task()
+        assert due is not None and due.id == task_id
+
+    async def test_atomic_claim_no_duplicates(self, queue):
+        for i in range(20):
+            await queue.add_task("t", {"i": i}, TaskPriority.MEDIUM)
+        claimed = await asyncio.gather(*[asyncio.to_thread(queue._claim_next_task) for _ in range(30)])
+        ids = [t.id for t in claimed if t]
+        assert len(ids) == 20 and len(set(ids)) == 20
+
+    async def test_start_stop_restart_lifecycle(self, queue):
+        processed = []
+
+        async def handler(payload):
+            processed.append(payload["n"])
+            return {"ok": True}
+
+        queue.register_handler("work", handler)
+        await queue.start()
+        workers = list(queue.workers)
+        await queue.start()  # second start is a no-op
+        assert queue.workers == workers and len(workers) == 2
+
+        stop_started = asyncio.get_running_loop().time()
+        await queue.stop()
+        assert asyncio.get_running_loop().time() - stop_started < 2.0  # idle workers wake on shutdown
+        assert queue.workers == [] and not queue.is_running
+
+        await queue.add_task("work", {"n": 1}, TaskPriority.HIGH)
+        await queue.start()  # restart clears the shutdown flag
+        for _ in range(50):
+            if processed:
+                break
+            await asyncio.sleep(0.05)
+        await queue.stop()
+        assert processed == [1]
+
+    async def test_timestamps_are_utc(self, queue):
+        task_id = await queue.add_task("t", {}, TaskPriority.LOW)
+        task = await queue.get_task_status(task_id)
+        assert task.created_at.tzinfo is not None
+
+    async def test_legacy_schema_migrated(self, tmp_path):
+        path = tmp_path / "legacy.db"
+        with sqlite3.connect(path) as conn:
+            conn.execute("""CREATE TABLE tasks (id TEXT PRIMARY KEY, task_type TEXT NOT NULL,
+                priority INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+                started_at TEXT, completed_at TEXT, retry_count INTEGER DEFAULT 0, max_retries INTEGER DEFAULT 3,
+                error_message TEXT, result TEXT, timeout_seconds INTEGER DEFAULT 300)""")
+            conn.execute("INSERT INTO tasks VALUES ('old', 't', 2, '{}', 'retrying', '2024-01-01T00:00:00', "
+                         "NULL, NULL, 1, 3, 'x', NULL, 300)")
+        queue = TaskQueue(db_path=str(path))
+        claimed = await queue.get_next_task()
+        assert claimed.id == "old"  # NULL next_retry_at means due immediately
