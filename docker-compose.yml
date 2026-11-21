@@ -4,27 +4,38 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      - HOST=0.0.0.0
-      - PORT=8000
+      HOST: 0.0.0.0
+      PORT: 8000
+      # Local dev: DEBUG=true docker compose up  (REST and live metrics work without a token).
+      # Anything else: set SECRET_KEY to 32+ random chars; the API refuses to
+      # start without one when DEBUG is false.
+      #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+      SECRET_KEY: ${SECRET_KEY:-}
+      DEBUG: ${DEBUG:-false}
     volumes:
       - ts-data:/app/data
       - ts-reports:/app/reports
       - ts-logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       args:
-        # Must be reachable from the browser, not from inside the docker network
+        # Must be reachable from the browser, not from inside the docker network.
+        # No token here: analysts enter it in the console at runtime.
         VITE_API_URL: http://localhost:8000/api/v1
-        VITE_API_TOKEN: dev-secret-key
     ports:
       - "3000:8080"
     depends_on:
       - api
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
 volumes:

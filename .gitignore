@@ -99,3 +99,11 @@ docs/_build/
 # Node
 node_modules/
 
+
+# Frontend build output
+frontend/build/
+frontend/dist/
+
+# Tooling caches and local virtualenvs
+.ruff_cache/
+.venv/

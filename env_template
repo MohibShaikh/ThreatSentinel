@@ -1,60 +1,77 @@
-# ThreatSentinel SOC Agent Configuration
-# Copy this file to .env and update with your actual values
+# ThreatSentinel configuration. Copy to .env and edit.
+# Every value here is optional; the defaults run a full keyless SOC agent.
 
-# Server Configuration
-HOST=0.0.0.0
+# ---------------------------------------------------------------- Server
+HOST=127.0.0.1
 PORT=8000
+# DEBUG=true: REST calls work without a token (local development only).
 DEBUG=false
 ENVIRONMENT=development
 
-# Security
-SECRET_KEY=your-secret-key-here-change-in-production
+# ---------------------------------------------------------------- Security
+# Required whenever DEBUG=false: 32+ random characters. The API refuses to
+# start with a missing, short, or well-known default value. Generate one with:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+SECRET_KEY=
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-# External API Keys (Get these from respective providers)
-VIRUSTOTAL_API_KEY=your_virustotal_api_key_here
-ABUSEIPDB_API_KEY=your_abuseipdb_api_key_here
-URLVOID_API_KEY=your_urlvoid_api_key_here
-SHODAN_API_KEY=your_shodan_api_key_here
+# ---------------------------------------------------------------- Zero-API-key intel
+# Local forensics, Shodan InternetDB, RDAP and the CISA KEV catalog. No keys.
+ENABLE_KEYLESS_INTEL=true
 
-# Agent Configuration
+# ---------------------------------------------------------------- LLM (optional)
+# Leave LLM_PROVIDER unset for deterministic, offline analysis. Local models
+# need no API key. Secrets are redacted before any prompt leaves the process.
+# LLM_PROVIDER=ollama
+# LLM_MODEL=llama3.2
+# LLM_BASE_URL=http://localhost:11434/v1
+# LLM_API_KEY=
+# LLM_TEMPERATURE=0.3
+# LLM_MAX_TOKENS=2048
+# LLM_REDACT_SECRETS=true
+# LLM_MAX_TOOL_STEPS=5
+
+# ---------------------------------------------------------------- Paid intel (optional)
+# Each key adds a source; leaving them out costs nothing but coverage.
+# VIRUSTOTAL_API_KEY=
+# ABUSEIPDB_API_KEY=
+# URLVOID_API_KEY=
+# SHODAN_API_KEY=
+
+# ---------------------------------------------------------------- Agent
 CONFIDENCE_THRESHOLD=0.7
 EMERGENCY_THRESHOLD=0.8
 MAX_INVESTIGATION_TIME=300
 MAX_CONCURRENT_INVESTIGATIONS=10
+INVESTIGATION_TIMEOUT=600
+TASK_QUEUE_WORKERS=2
 
-# Storage Paths
+# ---------------------------------------------------------------- Rate limiting
+# Requests per client per window (seconds)
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=60
+
+# ---------------------------------------------------------------- CORS
+# JSON list or comma-separated. "*" is rejected because credentials are allowed.
+CORS_ORIGINS=["http://localhost:3000","http://localhost:5173","http://localhost:8080"]
+
+# ---------------------------------------------------------------- Storage
 DATA_DIR=data
 REPORTS_DIR=reports
 MEMORY_DIR=data/memory
 LOGS_DIR=logs
-
-# Database (future expansion)
-# DATABASE_URL=sqlite:///./ThreatSentinel_soc.db
-
-# Redis (future expansion)
-# REDIS_URL=redis://localhost:6379
-
-# Logging
-LOG_LEVEL=INFO
-LOG_FORMAT="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-# Rate Limiting
-RATE_LIMIT_REQUESTS=100
-RATE_LIMIT_WINDOW=3600
-
-# CORS (configure for production)
-CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080"]
-
-# Integrations (JSON config for firewalls, SIEMs, communication, incident tools)
-# INTEGRATIONS_CONFIG='{"integrations": {"palo_alto": {"hostname": "fw.company.com", "api_key": "..."}}}'
-
-# Reports
 AUTO_SAVE_REPORTS=true
 
-# Monitoring
+# ---------------------------------------------------------------- Logging
+LOG_LEVEL=INFO
+
+# ---------------------------------------------------------------- Monitoring
 HEALTH_CHECK_INTERVAL=60
 METRICS_ENABLED=true
 
-# Investigation Limits
-INVESTIGATION_TIMEOUT=600 
+# ---------------------------------------------------------------- Integrations (optional)
+# JSON with an "integrations" object keyed by type: palo_alto, fortinet,
+# pfsense, splunk, qradar, azure_sentinel, slack, teams, email, servicenow,
+# jira, pagerduty. Response actions only reach these after risk scoring and,
+# when escalated, analyst approval.
+# INTEGRATIONS_CONFIG='{"integrations": {"slack": {"webhook_url": "https://hooks.slack.com/services/..."}}}'
